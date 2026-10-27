@@ -31,6 +31,8 @@ async def operator_trial(operator, index, token, args):
                     distance=min(max(seq-15,0),50)*.0003*(1 if index == 0 else -1)
                     rows=np.zeros((2,15));rows[:,6]=1;rows[:,9]=1
                     rows[1,0]=distance;rows[1,8]=float(seq>=10)
+                    if args.hands == 'both':
+                        rows[0,0]=-distance;rows[0,8]=float(seq>=10)
                     yaw=min(seq,50)*.002
                     head=[distance*4,1.6,0,0,float(np.sin(yaw/2)),0,float(np.cos(yaw/2)),1]
                     await socket.send(json.dumps(dict(version=1,seq=seq,controllers=rows.tolist(),head=head)))
@@ -60,8 +62,8 @@ async def run(args):
         if match: break
         await asyncio.sleep(.5)
     else: raise RuntimeError('Simulation server did not start')
-    await asyncio.gather(*(operator_trial(operator,index,match[1],args) for index,operator in enumerate(('a','b'))))
-    print('PASS: two simultaneous HMD uplinks and decoded simulation video return streams',flush=True)
+    await asyncio.gather(*(operator_trial(operator,index,match[1],args) for index,operator in enumerate(args.operators)))
+    print(f'PASS: {len(args.operators)} HMD uplink(s) and decoded simulation video return streams',flush=True)
 
 
 if __name__ == '__main__':
@@ -69,5 +71,7 @@ if __name__ == '__main__':
     parser.add_argument('--startup-log',type=Path,required=True)
     parser.add_argument('--port',type=int,default=18443)
     parser.add_argument('--samples',type=int,default=240)
+    parser.add_argument('--operators',nargs='+',default=['a','b'])
+    parser.add_argument('--hands',choices=['right','both'],default='right')
     parser.add_argument('--output',type=Path)
     asyncio.run(run(parser.parse_args()))
