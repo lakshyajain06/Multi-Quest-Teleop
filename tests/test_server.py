@@ -19,7 +19,7 @@ from multi_quest_teleop import WebXRServer, create_local_certificate
 
 class WebXRTrials(unittest.TestCase):
     def setUp(self):
-        self.server = WebXRServer(['a:right', 'b:left'], host='127.0.0.1', port=0, timeout=.1)
+        self.server = WebXRServer(['a:right', 'b:left'], host='127.0.0.1', port=0, timeout=.1, require_pairing=True)
         self.server.__enter__()
         self.port = self.server.server.socket.getsockname()[1]
         self.clients = []
@@ -44,6 +44,19 @@ class WebXRTrials(unittest.TestCase):
     def send(self, client, rows, seq=0):
         client.send(json.dumps({'version': 1, 'seq': seq, 'controllers': rows.tolist()}))
         self.assertEqual(json.loads(client.recv()), {'ack': seq})
+
+    def test_pairing_is_disabled_by_default(self):
+        with WebXRServer(['a:right'],host='127.0.0.1',port=0) as receiver:
+            self.assertEqual(receiver.token,'')
+            with connect(f'ws://127.0.0.1:{receiver.port}/input?operator=a') as client:
+                self.send(client,self.rows())
+
+    def test_optional_pairing_generates_four_digits_and_rejects_missing_code(self):
+        self.assertTrue(self.server.token.isdigit())
+        self.assertEqual(len(self.server.token),4)
+        with self.assertRaises(InvalidStatus):
+            connect(f'ws://127.0.0.1:{self.port}/input?operator=a')
+        self.send(self.client(),self.rows())
 
     def test_http_and_authentication(self):
         with urllib.request.urlopen(f'http://127.0.0.1:{self.port}/') as response:

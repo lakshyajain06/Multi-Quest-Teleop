@@ -36,8 +36,9 @@ with MultiQuestDevice(
     yaw_degrees=[0, 180],
     video=True, video_fps=20,
 ) as teleop:
-    # Print teleop.token locally so operators can enter it in the browser page.
-    print("Session token:", teleop.token)
+    # Pairing is disabled by default. Enable require_pairing=True if desired.
+    if teleop.token:
+        print("Pairing code:", teleop.token)
     while simulation_app.is_running():
         controllers = teleop.advance()
         actions = map_inputs_to_actions(controllers, observations)  # your task
@@ -95,7 +96,7 @@ use an application event protocol if every short button pulse must be retained.
 2. Enter the workstation address, e.g. `https://192.168.1.100:8443`.
 3. Open **Accept workstation certificate**, accept the local certificate warning,
    and return to the controller page. Allow local network access if prompted.
-4. Enter the assigned operator ID and the receiver's session token.
+4. Enter the assigned operator ID. Leave the optional pairing code blank by default.
 5. Select **Connect and enter XR**, then release controller grips before moving.
 
 GitHub Pages serves only the page. Controller input travels directly to the
@@ -167,7 +168,7 @@ renderer and camera-source API can be extended independently. The current codec
 uses CPU encoding; scaling to more high-resolution headsets will require GPU
 encoding and bandwidth measurements.
 
-WebRTC signaling shares the authenticated control WebSocket; media uses direct
+WebRTC signaling shares the control WebSocket; media uses direct
 LAN UDP ICE endpoints (dynamic UDP ports must be reachable). There are no STUN
 or TURN services in the default LAN configuration. Each operator has a separate
 peer and a latest-frame slot; encoding never blocks the simulation thread.
@@ -199,3 +200,15 @@ interval and require a fresh grip release when tracking resumes.
 Button callbacks can preserve a single-headset control scheme, e.g. left
 primary/secondary for save/discard and right secondary for pause. Specific robot
 presets and recording commands belong in the consuming application's guide.
+
+
+## Optional pairing code
+
+Pairing codes are **off by default**. Enter the workstation address and operator
+ID and connect; leave the pairing-code field blank. Origin checks and exclusive
+operator ownership still apply.
+
+For an optional random four-digit code, construct the device or receiver with
+`require_pairing=True`. It prints `Pairing code: 1234` (example) when starting.
+The code changes on each startup. An explicit `token=` value also enables the
+check for applications that need to supply their own code.

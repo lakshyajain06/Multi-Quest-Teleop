@@ -58,11 +58,11 @@ async def operator_trial(operator, index, token, args):
 async def run(args):
     for _ in range(240):
         text=args.startup_log.read_text(errors='replace') if args.startup_log.exists() else ''
-        match=re.search(rf'{args.port}/\?token=([\w-]+)',text)
+        match=re.search(rf'{args.port}/(?:\?token=([\w-]+))?',text)
         if match: break
         await asyncio.sleep(.5)
     else: raise RuntimeError('Simulation server did not start')
-    await asyncio.gather(*(operator_trial(operator,index,match[1],args) for index,operator in enumerate(args.operators)))
+    await asyncio.gather(*(operator_trial(operator,index,match[1] or '',args) for index,operator in enumerate(args.operators)))
     print(f'PASS: {len(args.operators)} HMD uplink(s) and decoded simulation video return streams',flush=True)
 
 

@@ -7,7 +7,9 @@
 <label>Workstation address <input id="server" placeholder="https://192.168.1.100:8443" autocomplete="off"></label>
 <p><a id="certificate" target="_blank" rel="noopener noreferrer" style="color:#8ed7ff">Accept workstation certificate</a> once, then return here. Allow local network access if the browser asks.</p>
 <label>Operator ID <input id="operator" value="a" autocomplete="off"></label>
-<label>Session token <input id="token" type="password" autocomplete="off"></label>
+<details><summary>Pairing code (optional)</summary>
+<label>4-digit code <input id="token" type="text" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="Leave blank unless enabled"></label>
+</details>
 <label><input id="video-enabled" type="checkbox" checked> Receive simulation video</label>
 <p id="video-status">Video not connected.</p>
 <button id="start">Connect and enter XR</button><button id="stop" disabled>Disconnect</button>
@@ -132,7 +134,7 @@ $('start').onclick = async () => {
     const url = new URL('/input', workstation);
     url.protocol = workstation.protocol === 'https:' ? 'wss:' : 'ws:';
     url.searchParams.set('operator', $('operator').value.trim());
-    url.searchParams.set('token', $('token').value);
+    if ($('token').value.trim()) url.searchParams.set('token', $('token').value.trim());
     socket = new WebSocket(url);
     const activeSocket = socket;
     outstanding = null; sequence = 0;
@@ -144,7 +146,7 @@ $('start').onclick = async () => {
       if (reply.ack === outstanding) outstanding = null;
     };
     socket.onopen = () => { if (socket !== activeSocket) return; status('Connected. Release grip once before moving.'); if ($('video-enabled').checked) startVideo(activeSocket).catch(error=>{$('video-status').textContent=error.message;}); };
-    socket.onerror = () => { if (socket !== activeSocket) return; status('Connection failed. Check operator ID, token, and certificate.'); stop(); };
+    socket.onerror = () => { if (socket !== activeSocket) return; status('Connection failed. Check workstation address, operator ID, certificate, and pairing code if enabled.'); stop(); };
     socket.onclose = event => { if (socket !== activeSocket) return; status(`Disconnected: ${event.reason || 'connection closed'}. Reconnect to resume.`); stop(); };
     $('stop').disabled = false;
     function frame(t, xrFrame) {

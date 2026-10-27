@@ -18,16 +18,17 @@ parser.add_argument('--samples', type=int, default=180)
 args = parser.parse_args()
 for _ in range(120):
     text = args.startup_log.read_text(errors='replace') if args.startup_log.exists() else ''
-    match = re.search(rf'{args.port}/\?token=([\w-]+)', text)
+    match = re.search(rf'{args.port}/(?:\?token=([\w-]+))?', text)
     if match:
         break
     time.sleep(.5)
 else:
     raise RuntimeError('Simulation server did not start within 60 seconds')
+session_token = match[1] or ""
 clients = []
 try:
     for operator in ('a', 'b'):
-        clients.append(connect(f'ws://127.0.0.1:{args.port}/input?operator={operator}&token={match[1]}'))
+        clients.append(connect(f'ws://127.0.0.1:{args.port}/input?operator={operator}&token={session_token}'))
     for seq in range(args.samples):
         for index, client in enumerate(clients):
             rows = [[0,0,0,0,0,0,1,0,0,1,0,0,0,0,0] for _ in range(2)]

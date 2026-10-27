@@ -58,7 +58,7 @@ class WebXRServer:
     """
 
     def __init__(self, bindings, host='0.0.0.0', port=8443, cert=None, key=None,
-                 timeout=0.25, yaw_degrees=None, token=None, allowed_origins=(), video=False, video_fps=20):
+                 timeout=0.25, yaw_degrees=None, token=None, allowed_origins=(), video=False, video_fps=20, require_pairing=False):
         if not bindings or timeout <= 0 or not np.isfinite(timeout):
             raise ValueError('At least one binding and a positive finite timeout are required')
         if yaw_degrees is None:
@@ -73,7 +73,10 @@ class WebXRServer:
         self.rotations = [Rotation.from_euler('z', yaw, degrees=True) *
                           Rotation.from_euler('x', 90, degrees=True) for yaw in yaw_degrees]
         self.host, self.port, self.timeout = host, port, timeout
-        self.token = token or secrets.token_urlsafe(24)
+        self.require_pairing = bool(require_pairing or token is not None)
+        self.token = str(token) if token is not None else (
+            f'{secrets.randbelow(10000):04d}' if self.require_pairing else ''
+        )
         self.allowed_origins = set(allowed_origins)
         self.lock = threading.Lock()
         self.clients, self.samples = {}, {}
@@ -108,7 +111,7 @@ class WebXRServer:
         query = parse_qs(url.query)
         operator = query.get('operator', [''])[0]
         supplied = query.get('token', [''])[0]
-        if url.path != '/input' or not secrets.compare_digest(supplied, self.token):
+        if url.path != '/input' or (self.require_pairing and not secrets.compare_digest(supplied, self.token)):
             return connection.respond(403, 'Invalid input URL or token\n')
         if operator not in {b[0] for b in self.bindings}:
             return connection.respond(403, 'Operator is not assigned\n')
@@ -266,7 +269,9 @@ class WebXRServer:
         self.thread.start()
         self.port = self.server.socket.getsockname()[1]
         scheme = 'https' if self.context else 'http'
-        print(f'WebXR: {scheme}://<workstation-host>:{self.port}/?token={self.token}', flush=True)
+        suffix = f'?token={self.token}' if self.require_pairing else ''
+        print(f'WebXR: {scheme}://<workstation-host>:{self.port}/{suffix}', flush=True)
+        print(f'Pairing code: {self.token if self.require_pairing else "disabled (leave blank)"}', flush=True)
         return self
 
     def __exit__(self, *exc):
