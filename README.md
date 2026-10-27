@@ -182,3 +182,20 @@ python examples/mock_video_headsets.py --startup-log /tmp/simulation.log --outpu
 ```
 
 This script moves both mock controllers and headsets. Use only with simulation.
+
+## Single-headset operation
+
+Both bindings may belong to the same operator. For example,
+`bindings=["a:left", "a:right"]` supplies both hands from one Quest connection.
+The application defines the row-to-robot mapping, so it can reverse this order
+when a side view places the robots on opposite screen sides.
+
+When a world camera is anchored at a rotated viewpoint, use
+`rig.map_tracking_pose(controller_pose)` to put each controller into the same
+world frame as that camera before applying robot-specific clutch/IK mapping.
+It returns `None` without a current head reference; disarm movement during that
+interval and require a fresh grip release when tracking resumes.
+
+Button callbacks can preserve a single-headset control scheme, e.g. left
+primary/secondary for save/discard and right secondary for pause. Specific robot
+presets and recording commands belong in the consuming application's guide.
