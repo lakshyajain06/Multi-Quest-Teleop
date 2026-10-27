@@ -11,14 +11,14 @@ recording. It does not require CloudXR, ROS, or a headset APK.
 With Isaac Lab already installed:
 
 ```bash
-pip install -e .
+pip install -e ".[video]"
 ```
 
 Or add this repository as a submodule and install it:
 
 ```bash
 git submodule add https://github.com/lakshyajain06/Multi-Quest-Teleop.git third_party/multi_quest_teleop
-pip install -e third_party/multi_quest_teleop
+pip install -e "third_party/multi_quest_teleop[video]"
 ```
 
 Import the device after your normal Isaac Lab application startup. It implements
@@ -34,6 +34,7 @@ with MultiQuestDevice(
     cert=cert, key=key,
     allowed_origins=["https://lakshyajain06.github.io"],
     yaw_degrees=[0, 180],
+    video=True, video_fps=20,
 ) as teleop:
     # Print teleop.token locally so operators can enter it in the browser page.
     print("Session token:", teleop.token)
@@ -41,6 +42,9 @@ with MultiQuestDevice(
         controllers = teleop.advance()
         actions = map_inputs_to_actions(controllers, observations)  # your task
         observations, *_ = env.step(actions)
+        # Supply one uint8 RGB frame per operator, from your chosen camera.
+        teleop.publish_video("a", render_camera_a())
+        teleop.publish_video("b", render_camera_b())
         # Continue using your existing recorder and episode controls here.
 ```
 
@@ -95,8 +99,8 @@ use an application event protocol if every short button pulse must be retained.
 5. Select **Connect and enter XR**, then release controller grips before moving.
 
 GitHub Pages serves only the page. Controller input travels directly to the
-workstation over the LAN. The page shows passthrough; simulation video is not
-included. Certificates are generated locally using OpenSSL; no domain purchase
+workstation over the LAN. The video option opens immersive VR and displays the operator's monoscopic
+camera feed in both eye viewports. Input-only mode uses passthrough. Certificates are generated locally using OpenSSL; no domain purchase
 or external certificate authority is needed. Physical Quest testing is still
 required for browser permissions and certificate exceptions.
 
@@ -109,9 +113,12 @@ Fragments are not sent to GitHub. Do not publish token-bearing URLs or keys.
 ```bash
 python -m unittest discover -s tests -p 'test_*.py' -v
 node tests/browser_trials.cjs
+node tests/browser_video_trials.cjs
 ```
 
-Server tests require only the package dependencies. Device adapter tests also
+Server tests require only the package dependencies. WebRTC tests require the
+`video` extra and exercise two simultaneous video streams with actual VP8
+encoding/decoding. Device adapter tests also
 require Isaac Lab. `WebXRServer` is available from `multi_quest_teleop` for
 consumers that do not use Isaac Lab. `examples/mock_headsets.py` sends synthetic
 controller input to a local receiver; use it only with simulation.
@@ -122,3 +129,56 @@ Publish the `main` branch, root directory. The root page forwards to the package
 client, preserving launch fragments. The public repository contains only this
 library and browser client; robot assets, datasets, and task code stay in the
 application repository. No Isaac Lab source is vendored here.
+
+
+## Camera modes and future robot head control
+
+Camera sources and head motion are separate APIs. `teleop.head_pose(operator)`
+returns `(pose, continuity_id)`, with a fresh Z-up XYZW pose or `None` if tracking
+is lost/stale. Reconnecting or a tracking gap changes the continuity ID. Arm
+controller packets and their existing shape are unchanged.
+
+For a virtual spectator camera, use the source-independent helper:
+
+```python
+from multi_quest_teleop.view import WorldCameraRig
+
+rig = WorldCameraRig(initial_camera_world_pose_xyzw)
+head, continuity = teleop.head_pose("a")
+set_camera_world_pose(rig.update(head, session=continuity))
+teleop.publish_video("a", render_camera_a())
+```
+
+The first head pose establishes the reference at the chosen world camera anchor.
+Subsequent headset translation and rotation move that camera; after tracking
+loss the view holds and resumes without a discontinuous jump. The application
+chooses the world anchors and performs camera rendering.
+
+For a robot-mounted head camera, publish that camera's frames directly. Do not
+also move a spectator camera from the same head pose. A task-specific head mapper
+can later turn relative headset motion into bounded robot head-joint targets.
+The video presentation remains fixed to the returned camera image, avoiding a
+second application of head rotation. This library does not command robot head
+joints or add them silently to an existing action/recording schema.
+
+The current return path is monoscopic, with no depth reprojection or local
+head-pose prediction. It is not equivalent to a stereo OpenXR renderer. The
+renderer and camera-source API can be extended independently. The current codec
+uses CPU encoding; scaling to more high-resolution headsets will require GPU
+encoding and bandwidth measurements.
+
+WebRTC signaling shares the authenticated control WebSocket; media uses direct
+LAN UDP ICE endpoints (dynamic UDP ports must be reachable). There are no STUN
+or TURN services in the default LAN configuration. Each operator has a separate
+peer and a latest-frame slot; encoding never blocks the simulation thread.
+A missing frame source stops producing fresh media after two seconds, and the
+browser disconnects after three seconds of stalled playback. Failed video also
+disconnects input; uncheck video when intentionally using an input-only server.
+
+Synthetic end-to-end test (with the application receiver already starting):
+
+```bash
+python examples/mock_video_headsets.py --startup-log /tmp/simulation.log --output /tmp/decoded-quest-views
+```
+
+This script moves both mock controllers and headsets. Use only with simulation.

@@ -58,7 +58,7 @@ class WebXRServer:
     """
 
     def __init__(self, bindings, host='0.0.0.0', port=8443, cert=None, key=None,
-                 timeout=0.25, yaw_degrees=None, token=None, allowed_origins=()):
+                 timeout=0.25, yaw_degrees=None, token=None, allowed_origins=(), video=False, video_fps=20):
         if not bindings or timeout <= 0 or not np.isfinite(timeout):
             raise ValueError('At least one binding and a positive finite timeout are required')
         if yaw_degrees is None:
@@ -78,6 +78,12 @@ class WebXRServer:
         self.lock = threading.Lock()
         self.clients, self.samples = {}, {}
         self.generations, self.observed = {}, {}
+        self.head_samples = {}
+        self.head_generations = {}
+        self.video = None
+        if video:
+            from .video import VideoReturn
+            self.video = VideoReturn(fps=video_fps)
         self.context = None
         if bool(cert) != bool(key):
             raise ValueError('Supply both TLS certificate and key')
@@ -127,6 +133,18 @@ class WebXRServer:
         try:
             for raw in connection:
                 message = json.loads(raw)
+                if isinstance(message, dict) and message.get('type') == 'video_offer':
+                    if not self.video:
+                        connection.send(json.dumps({'type': 'video_error', 'message': 'Video is disabled on this receiver'}))
+                        continue
+                    sdp = message.get('sdp')
+                    if not isinstance(sdp, str) or len(sdp) > 60000:
+                        raise ValueError('Invalid video offer')
+                    try:
+                        connection.send(json.dumps(self.video.answer(operator, sdp)))
+                    except Exception:
+                        connection.send(json.dumps({'type': 'video_error', 'message': 'Video negotiation failed'}))
+                    continue
                 seq = message['seq']
                 if message['version'] != 1 or type(seq) is not int or seq <= previous:
                     raise ValueError('Invalid protocol version or sequence')
@@ -142,6 +160,13 @@ class WebXRServer:
                 for row in rows:
                     if row[9] and not 0.9 < np.linalg.norm(row[3:7]) < 1.1:
                         raise ValueError('Invalid quaternion')
+                head = message.get('head')
+                if head is not None:
+                    head = np.asarray(head, dtype=np.float32)
+                    if head.shape != (8,) or not np.isfinite(head).all() or head[7] not in (0, 1):
+                        raise ValueError('Expected finite head pose and validity')
+                    if head[7] and not .9 < np.linalg.norm(head[3:7]) < 1.1:
+                        raise ValueError('Invalid head quaternion')
                 previous = seq
                 with self.lock:
                     now = time.monotonic()
@@ -151,6 +176,14 @@ class WebXRServer:
                     if last is not None:
                         lost = (last[1][:, 9] == 1) & (rows[:, 9] == 0)
                         self.generations[operator] += lost.astype(int)
+                    old_head = self.head_samples.get(operator)
+                    if head is None or not head[7]:
+                        self.head_samples.pop(operator, None)
+                        self.head_generations[operator] = self.head_generations.get(operator, 0) + 1
+                    else:
+                        if old_head is None or now - old_head[0] > self.timeout:
+                            self.head_generations[operator] = self.head_generations.get(operator, 0) + 1
+                        self.head_samples[operator] = (now, head[:7].copy())
                     self.samples[operator] = (now, rows.copy())
                 # Acknowledgement limits the browser to one outstanding sample.
                 connection.send(json.dumps({'ack': seq}))
@@ -160,6 +193,30 @@ class WebXRServer:
             with self.lock:
                 self.clients.pop(operator, None)
                 self.samples.pop(operator, None)
+                self.head_samples.pop(operator, None)
+                self.head_generations[operator] = self.head_generations.get(operator, 0) + 1
+            if self.video:
+                self.video.remove(operator)
+
+    def head_pose(self, operator):
+        """Latest Z-up XYZW head pose and continuity ID; (None, ID) if stale."""
+        with self.lock:
+            sample = self.head_samples.get(operator)
+            generation = self.head_generations.get(operator, 0)
+            if sample is None or time.monotonic() - sample[0] > self.timeout:
+                return None, generation
+            pose = sample[1].copy()
+        basis = Rotation.from_euler('x', 90, degrees=True)
+        pose[:3] = basis.apply(pose[:3])
+        pose[3:] = (basis * Rotation.from_quat(pose[3:])).as_quat()
+        return pose, generation
+
+    def publish_video(self, operator, rgb):
+        if not self.video:
+            raise RuntimeError('Enable video when constructing this receiver')
+        if operator not in {binding[0] for binding in self.bindings}:
+            raise ValueError('Operator is not configured')
+        self.video.publish(operator, rgb)
 
     def snapshot(self):
         packet = np.zeros((len(self.bindings), 15), dtype=np.float32)
@@ -182,8 +239,10 @@ class WebXRServer:
 
     def __enter__(self):
         self.server = serve(self._handle, self.host, self.port, ssl=self.context,
-                            process_request=self._request, max_size=8192, max_queue=1,
+                            process_request=self._request, max_size=65536, max_queue=1,
                             compression=None, close_timeout=1)
+        if self.video:
+            self.video.start()
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.port = self.server.socket.getsockname()[1]
@@ -198,3 +257,5 @@ class WebXRServer:
             connection.close(1001, 'Simulation stopped')
         self.server.shutdown()
         self.thread.join(timeout=3)
+        if self.video:
+            self.video.close()

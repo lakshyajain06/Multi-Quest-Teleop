@@ -1,15 +1,17 @@
 <!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ultra Quest teleoperation</title>
+<title>Quest teleoperation</title>
 <style>body{font:20px system-ui;max-width:700px;margin:3rem auto;padding:1rem;background:#14202b;color:#edf5ff}input,button{font:inherit;padding:.6rem;margin:.4rem;max-width:90%}label{display:block}#status{white-space:pre-wrap}</style>
 <h1>Quest teleoperation</h1>
-<p>Connect each headset with its assigned operator ID. Release grip once, then hold grip to move. Trigger controls the gripper. Watch the simulation on the workstation monitor.</p>
+<p>Connect each headset with its assigned operator ID. Release grip once, then hold grip to move. Trigger controls the gripper. The simulation video appears in the headset when video is enabled on the workstation.</p>
 <label>Workstation address <input id="server" placeholder="https://192.168.1.100:8443" autocomplete="off"></label>
 <p><a id="certificate" target="_blank" rel="noopener noreferrer" style="color:#8ed7ff">Accept workstation certificate</a> once, then return here. Allow local network access if the browser asks.</p>
 <label>Operator ID <input id="operator" value="a" autocomplete="off"></label>
 <label>Session token <input id="token" type="password" autocomplete="off"></label>
+<label><input id="video-enabled" type="checkbox" checked> Receive simulation video</label>
+<p id="video-status">Video not connected.</p>
 <button id="start">Connect and enter XR</button><button id="stop" disabled>Disconnect</button>
-<p id="status">Ready. Use Quest controllers. This version sends input only.</p>
+<p id="status">Ready. Use Quest controllers. Controller input and per-operator video.</p>
 <canvas id="view"></canvas>
 <script>
 const $ = id => document.getElementById(id);
@@ -30,9 +32,77 @@ updateCertificateLink();
 $('token').value = params.get('token') || '';
 $('operator').value = params.get('operator') || 'a';
 let socket, session, sequence = 0, outstanding = null, sentAt = 0;
+let peer, videoElement, videoRenderer, videoProgressAt=0, videoTime=-1;
+function createVideoRenderer(gl) {
+  const shader = (type, code) => {
+    const result = gl.createShader(type); gl.shaderSource(result, code); gl.compileShader(result);
+    if (!gl.getShaderParameter(result, gl.COMPILE_STATUS)) throw Error(gl.getShaderInfoLog(result));
+    return result;
+  };
+  const vertex = shader(gl.VERTEX_SHADER, 'attribute vec2 p; varying vec2 uv; uniform vec2 fit; void main(){uv=(p+1.0)*0.5; gl_Position=vec4(p*fit,0.0,1.0);}');
+  const fragment = shader(gl.FRAGMENT_SHADER, 'precision mediump float; varying vec2 uv; uniform sampler2D image; void main(){gl_FragColor=vec4(texture2D(image,uv).rgb,1.0);}');
+  const program = gl.createProgram(); gl.attachShader(program,vertex); gl.attachShader(program,fragment); gl.linkProgram(program);
+  gl.deleteShader(vertex); gl.deleteShader(fragment);
+  if (!gl.getProgramParameter(program,gl.LINK_STATUS)) throw Error(gl.getProgramInfoLog(program));
+  const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+  const texture = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,texture);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  return {
+    draw(video, views, layer) {
+      if (!video || video.readyState < 2 || !views) return;
+      gl.useProgram(program); gl.disable(gl.DEPTH_TEST);
+      gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+      const position=gl.getAttribLocation(program,'p'); gl.enableVertexAttribArray(position);
+      gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,texture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,video);
+      gl.uniform1i(gl.getUniformLocation(program,'image'),0);
+      for (const view of views) {
+        const viewport=layer.getViewport(view); gl.viewport(viewport.x,viewport.y,viewport.width,viewport.height);
+        const ratio=(video.videoWidth/video.videoHeight)/(viewport.width/viewport.height);
+        gl.uniform2f(gl.getUniformLocation(program,'fit'),Math.min(1,ratio),Math.min(1,1/ratio));
+        gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+      }
+    },
+    dispose() {gl.deleteTexture(texture);gl.deleteBuffer(buffer);gl.deleteProgram(program);}
+  };
+}
+async function startVideo(activeSocket) {
+  const activePeer = new RTCPeerConnection({iceServers:[]}); peer=activePeer;
+  videoElement=document.createElement('video'); videoElement.muted=true; videoElement.autoplay=true; videoElement.playsInline=true;
+  activePeer.ontrack=event=>{
+    if (peer !== activePeer) return;
+    videoElement.srcObject=new MediaStream([event.track]);
+    videoProgressAt=performance.now();videoTime=-1;
+    videoElement.play().then(()=>{$('video-status').textContent='Video receiving.';}).catch(()=>{$('video-status').textContent='Video playback blocked. Reconnect from the button.';});
+  };
+  activePeer.onconnectionstatechange=()=>{
+    if (peer === activePeer) {
+      $('video-status').textContent=`Video: ${activePeer.connectionState}`;
+      if (['failed','disconnected'].includes(activePeer.connectionState)) {stop();status('Video connection lost. Reconnect to resume.');}
+    }
+  };
+  activePeer.addTransceiver('video',{direction:'recvonly'});
+  await activePeer.setLocalDescription(await activePeer.createOffer());
+  if (activePeer.iceGatheringState !== 'complete') await new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(Error('Video network discovery timed out')),10000);
+    activePeer.addEventListener('icegatheringstatechange',()=>{
+      if (activePeer.iceGatheringState === 'complete') {clearTimeout(timer);resolve();}
+    });
+  });
+  if (socket === activeSocket && peer === activePeer) activeSocket.send(JSON.stringify({type:'video_offer',sdp:activePeer.localDescription.sdp}));
+}
 function status(text) { $('status').textContent = text; }
 async function stop() {
   const oldSession = session; session = null;
+  if (peer) {peer.close();peer=null;}
+  if (videoElement) {videoElement.pause();videoElement.srcObject=null;videoElement=null;}
+  if (videoRenderer) {videoRenderer.dispose();videoRenderer=null;}
   if (socket) { socket.close(); socket = null; }
   if (oldSession) await oldSession.end().catch(() => {});
   $('start').disabled = false; $('stop').disabled = true;
@@ -45,7 +115,7 @@ $('start').onclick = async () => {
     const workstation = workstationURL();
     if (location.protocol === 'https:' && workstation.protocol !== 'https:') throw Error('Use HTTPS for the workstation connection from this page.');
     // Request XR directly in the click handler to preserve user activation.
-    session = await navigator.xr.requestSession('immersive-ar', {requiredFeatures:['local-floor']});
+    session = await navigator.xr.requestSession($('video-enabled').checked ? 'immersive-vr' : 'immersive-ar', {requiredFeatures:['local-floor']});
     const activeSession = session;
     activeSession.addEventListener('end', () => { if (session === activeSession) stop(); });
     activeSession.addEventListener('visibilitychange', () => {
@@ -54,6 +124,7 @@ $('start').onclick = async () => {
     const gl = $('view').getContext('webgl', {xrCompatible:true, alpha:true});
     if (!gl) throw Error('WebGL unavailable');
     await gl.makeXRCompatible();
+    if ($('video-enabled').checked) videoRenderer=createVideoRenderer(gl);
     const layer = new XRWebGLLayer(activeSession, gl, {alpha:true});
     activeSession.updateRenderState({baseLayer:layer});
     const space = await activeSession.requestReferenceSpace('local-floor');
@@ -68,9 +139,11 @@ $('start').onclick = async () => {
     socket.onmessage = event => {
       if (socket !== activeSocket) return;
       const reply = JSON.parse(event.data);
+      if (reply.type === 'video_answer' && peer) peer.setRemoteDescription({type:'answer',sdp:reply.sdp}).catch(error=>{$('video-status').textContent=error.message;});
+      if (reply.type === 'video_error') {stop();status(reply.message);}
       if (reply.ack === outstanding) outstanding = null;
     };
-    socket.onopen = () => { if (socket === activeSocket) status('Connected. Release grip once before moving.'); };
+    socket.onopen = () => { if (socket !== activeSocket) return; status('Connected. Release grip once before moving.'); if ($('video-enabled').checked) startVideo(activeSocket).catch(error=>{$('video-status').textContent=error.message;}); };
     socket.onerror = () => { if (socket !== activeSocket) return; status('Connection failed. Check operator ID, token, and certificate.'); stop(); };
     socket.onclose = event => { if (socket !== activeSocket) return; status(`Disconnected: ${event.reason || 'connection closed'}. Reconnect to resume.`); stop(); };
     $('stop').disabled = false;
@@ -79,6 +152,14 @@ $('start').onclick = async () => {
       activeSession.requestAnimationFrame(frame);
       gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
       gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      const viewer = xrFrame.getViewerPose?.(space);
+      if (videoRenderer) {
+        videoRenderer.draw(videoElement,viewer?.views,layer);
+        if (videoElement && videoElement.readyState >= 2) {
+          if (videoElement.currentTime !== videoTime) {videoTime=videoElement.currentTime;videoProgressAt=performance.now();}
+          else if (performance.now()-videoProgressAt > 3000) {stop();status('Video stalled. Reconnect to resume.');return;}
+        }
+      }
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       if (outstanding !== null) {
         if (performance.now() - sentAt > 500) { stop(); status('Input link stalled. Reconnect to resume.'); }
@@ -94,8 +175,17 @@ $('start').onclick = async () => {
         const clicked = i => Number(pad.buttons[i]?.pressed || false);
         rows[source.handedness === 'right' ? 1 : 0] = [p.x,p.y,p.z,q.x,q.y,q.z,q.w,b(0),b(1),1,clicked(4),clicked(5),clicked(3),pad.axes[2]||0,pad.axes[3]||0];
       }
+      // Keep HMD poses flowing to the world camera while its first frame loads.
+      if ($('video-enabled').checked && (!videoElement || videoElement.readyState < 2)) {
+        for (const row of rows) row[9]=0;
+      }
       outstanding = sequence++; sentAt = performance.now();
-      socket.send(JSON.stringify({version:1,seq:outstanding,controllers:rows}));
+      let head=Array(8).fill(0);
+      if (viewer && !viewer.emulatedPosition) {
+        const p=viewer.transform.position,q=viewer.transform.orientation;
+        head=[p.x,p.y,p.z,q.x,q.y,q.z,q.w,1];
+      }
+      socket.send(JSON.stringify({version:1,seq:outstanding,controllers:rows,head}));
     }
     activeSession.requestAnimationFrame(frame);
   } catch (error) { await stop(); status(error.message); }
