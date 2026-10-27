@@ -1,9 +1,12 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
 const script=fs.readFileSync(path.join(__dirname,'../src/multi_quest_teleop/webxr.html'),'utf8').split('<script>')[1].split('</script>')[0];
-let nextFrame,session,draws=0,uploads=0;
+let nextFrame,session,draws=0,uploads=0;const ranges=[],fits=[],matrices=[];
 const elements=Object.fromEntries(['token','operator','start','stop','status','view','server','certificate','video-enabled','video-status'].map(id=>[id,{value:'',removeAttribute(){}}]));
 elements['video-enabled'].checked=true;
 const gl=new Proxy({makeXRCompatible:async()=>{},getShaderParameter:()=>true,getProgramParameter:()=>true,
+ getUniformLocation:(_,name)=>name,
+ uniform2f:(name,x,y)=>{if(name==='eyeRange')ranges.push([x,y]);if(name==='fit')fits.push([x,y]);},
+ uniformMatrix4fv:(_,transpose,matrix)=>matrices.push(Array.from(matrix)),
  drawArrays:()=>draws++,texImage2D:()=>uploads++},{get:(target,key)=>target[key] || (()=>({}))});
 elements.view.getContext=()=>gl;
 const video={readyState:2,videoWidth:640,videoHeight:480,play:async()=>{},pause(){}};
@@ -35,6 +38,19 @@ vm.createContext(context);vm.runInContext(script,context);
  nextFrame(0,{getViewerPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:0,z:0,w:1}},views:[{},{}]})});
  assert.equal(draws,2);assert.equal(uploads,1);
  assert.deepEqual(Array.from(socket.sent[1].head),[1,2,3,0,0,0,1,1]);
+ const projection=[1,0,0,0,0,1,0,0,0,0,-1,-1,0,0,-.1,0];
+ socket.onmessage({data:JSON.stringify({ack:0,video:{layout:'stereo-sbs',projections:{left:projection,right:projection}}})});
+ const eyeView=(eye,x)=>({eye,projectionMatrix:projection,transform:{position:{x,y:2,z:3},orientation:{x:0,y:0,z:0,w:1}}});
+ nextFrame(0,{getViewerPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:0,z:0,w:1}},views:[eyeView('left',.968),eyeView('right',1.032)]})});
+ assert.deepEqual(ranges.slice(-2),[[0,.5],[.5,.5]]);
+ assert.deepEqual(fits.slice(-2),[[1,1],[1,1]]); // cover each eye, no flat-screen letterboxing
+ assert.equal(matrices.length,2);
+ for(const matrix of matrices) for(let i=0;i<16;i++) assert.ok(Math.abs(matrix[i]-Number(i%5===0))<1e-6);
+ assert.equal(socket.sent.at(-1).views.length,2);
+ assert.equal(socket.sent.at(-1).views[0].eye,'left');
+ const asymmetric=projection.slice();asymmetric[8]=.2;asymmetric[9]=-.1;
+ const remap=vm.runInContext(`projectionMap(${JSON.stringify(projection)},${JSON.stringify(asymmetric)})`,context);
+ assert.ok(Math.abs(remap[12]-.2)<1e-6);assert.ok(Math.abs(remap[13]+.1)<1e-6);
  await elements.stop.onclick();assert.equal(Peer.all[0].closed,true);assert.equal(video.srcObject,null);
  console.log('PASS: WebRTC offer/answer, video playback, per-eye texture rendering, headset pose uplink, media cleanup');
 })().catch(error=>{console.error(error);process.exitCode=1;});

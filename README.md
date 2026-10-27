@@ -100,8 +100,9 @@ use an application event protocol if every short button pulse must be retained.
 5. Select **Connect and enter XR**, then release controller grips before moving.
 
 GitHub Pages serves only the page. Controller input travels directly to the
-workstation over the LAN. The video option opens immersive VR and displays the operator's monoscopic
-camera feed in both eye viewports. Input-only mode uses passthrough. Certificates are generated locally using OpenSSL; no domain purchase
+workstation over the LAN. The video option opens immersive VR. World views should supply separate eye
+images and source projections as described below. Mono camera feeds remain
+supported for robot-mounted cameras. Input-only mode uses passthrough. Certificates are generated locally using OpenSSL; no domain purchase
 or external certificate authority is needed. Physical Quest testing is still
 required for browser permissions and certificate exceptions.
 
@@ -162,9 +163,10 @@ The video presentation remains fixed to the returned camera image, avoiding a
 second application of head rotation. This library does not command robot head
 joints or add them silently to an existing action/recording schema.
 
-The current return path is monoscopic, with no depth reprojection or local
-head-pose prediction. It is not equivalent to a stereo OpenXR renderer. The
-renderer and camera-source API can be extended independently. The current codec
+The return path supports separate stereo eye views, with no depth reprojection
+or local head-pose prediction. The image is rendered using the latest received
+eye poses, so motion latency remains dependent on the simulation and network.
+It does not yet match native XR motion prediction/timewarp. The current codec
 uses CPU encoding; scaling to more high-resolution headsets will require GPU
 encoding and bandwidth measurements.
 
@@ -212,3 +214,51 @@ For an optional random four-digit code, construct the device or receiver with
 `require_pairing=True`. It prints `Pairing code: 1234` (example) when starting.
 The code changes on each startup. An explicit `token=` value also enables the
 check for applications that need to supply their own code.
+
+
+## Stereo world rendering (0.3)
+
+Displaying one flat image twice does not reproduce an XR world. For world views,
+the client now sends each `XRView`'s pose and full projection matrix. The
+application renders a camera at each actual eye pose, preserving eye separation
+and orientation, and packs left/right RGB images side by side into one video.
+The client samples only the corresponding half for each eye, fills its viewport,
+and maps the source frustum back to the Quest's eye projection. There is no
+letterboxed plane in stereo mode. Scissor rectangles isolate the eye viewports.
+
+```python
+from multi_quest_teleop.stereo import fit_eye_projection
+
+head, continuity = teleop.head_pose("a")
+rig.update(head, session=continuity)
+eyes = teleop.eye_views("a")
+if head is not None and eyes:
+    projections = {}
+    for eye in ("left", "right"):
+        pose = rig.map_tracking_pose(eyes[eye]["pose"])
+        projection, intrinsic = fit_eye_projection(eyes[eye]["projection"], width, height)
+        configure_eye_camera(eye, pose, intrinsic)  # application rendering adapter
+        projections[eye] = projection
+    left, right = render_eye_camera("left"), render_eye_camera("right")
+    teleop.publish_video("a", np.concatenate((left, right), axis=1),
+                        layout="stereo-sbs", projections=projections)
+```
+
+`np`, `width`, `height`, and camera adapter functions above come from the
+application. Do not publish the frame until both eye cameras have been configured
+and rendered. `eye_views()` returns `None` when stale. Poses use the same Z-up
+tracking basis as `head_pose()`. Projection matrices remain WebXR column-major
+OpenGL matrices and must not be rotated with the pose basis conversion.
+
+Isaac Lab's basic USD camera path assumes centered optics and square pixels.
+`fit_eye_projection()` chooses a symmetric covering frustum it can render without
+losing the headset's asymmetric eye rays. The returned intrinsic matrix configures
+the simulation camera; the returned source projection travels with the video
+format in control acknowledgements. The client uses source × inverse(XR eye
+projection) to sample the correct pixels, rather than approximating eye alignment
+with an aspect-ratio fit. Source projections should be cached while unchanged.
+
+Refresh the hosted page after updating; it displays **Client 0.3**. Old mono
+clients do not send the eye views needed for world stereo. Stereo doubles the
+pixel count at a given per-eye resolution. Actual Quest binocular fusion and
+motion comfort still require a physical headset check.

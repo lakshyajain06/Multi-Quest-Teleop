@@ -82,6 +82,7 @@ class WebXRServer:
         self.clients, self.samples = {}, {}
         self.generations, self.observed = {}, {}
         self.head_samples = {}
+        self.eye_samples = {}
         self.head_generations = {}
         self.video = None
         if video:
@@ -185,6 +186,23 @@ class WebXRServer:
                         raise ValueError('Expected finite head pose and validity')
                     if head[7] and not .9 < np.linalg.norm(head[3:7]) < 1.1:
                         raise ValueError('Invalid head quaternion')
+                views = message.get('views', [])
+                if not isinstance(views, list) or len(views) not in (0, 2):
+                    raise ValueError('Expected left and right eye views')
+                eyes = {}
+                for view in views:
+                    eye = view['eye']
+                    pose = np.asarray(view['pose'], dtype=np.float32)
+                    projection = np.asarray(view['projection'], dtype=np.float32)
+                    if eye not in ('left', 'right') or eye in eyes:
+                        raise ValueError('Invalid or duplicate eye')
+                    if pose.shape != (7,) or not np.isfinite(pose).all() or not .9 < np.linalg.norm(pose[3:]) < 1.1:
+                        raise ValueError('Invalid eye pose')
+                    if projection.shape != (16,) or not np.isfinite(projection).all():
+                        raise ValueError('Invalid eye projection')
+                    if abs(np.linalg.det(projection.reshape(4,4,order='F'))) < 1e-9:
+                        raise ValueError('Singular eye projection')
+                    eyes[eye] = {'pose': pose.copy(), 'projection': projection.copy()}
                 previous = seq
                 with self.lock:
                     now = time.monotonic()
@@ -202,9 +220,18 @@ class WebXRServer:
                         if old_head is None or now - old_head[0] > self.timeout:
                             self.head_generations[operator] = self.head_generations.get(operator, 0) + 1
                         self.head_samples[operator] = (now, head[:7].copy())
+                    if eyes:
+                        self.eye_samples[operator] = (now, eyes)
+                    else:
+                        self.eye_samples.pop(operator, None)
                     self.samples[operator] = (now, rows.copy())
                 # Acknowledgement limits the browser to one outstanding sample.
-                connection.send(json.dumps({'ack': seq}))
+                reply = {'ack': seq}
+                if self.video:
+                    video_format = self.video.format(operator)
+                    if video_format:
+                        reply['video'] = video_format
+                connection.send(json.dumps(reply))
         except (ValueError, TypeError, KeyError, ConnectionClosed):
             connection.close(1008, 'Invalid input or disconnected')
         finally:
@@ -218,6 +245,7 @@ class WebXRServer:
                     self.clients.pop(operator, None)
                     self.samples.pop(operator, None)
                     self.head_samples.pop(operator, None)
+                    self.eye_samples.pop(operator, None)
                     self.head_generations[operator] = self.head_generations.get(operator, 0) + 1
 
     def head_pose(self, operator):
@@ -233,12 +261,26 @@ class WebXRServer:
         pose[3:] = (basis * Rotation.from_quat(pose[3:])).as_quat()
         return pose, generation
 
-    def publish_video(self, operator, rgb):
+    def eye_views(self, operator):
+        """Fresh per-eye Z-up poses and original XR projections, or None."""
+        with self.lock:
+            sample = self.eye_samples.get(operator)
+            if sample is None or time.monotonic() - sample[0] > self.timeout:
+                return None
+            eyes = {eye: {name: value.copy() for name, value in view.items()}
+                    for eye, view in sample[1].items()}
+        basis = Rotation.from_euler('x', 90, degrees=True)
+        for view in eyes.values():
+            view['pose'][:3] = basis.apply(view['pose'][:3])
+            view['pose'][3:] = (basis * Rotation.from_quat(view['pose'][3:])).as_quat()
+        return eyes
+
+    def publish_video(self, operator, rgb, *, layout='mono', projections=None):
         if not self.video:
             raise RuntimeError('Enable video when constructing this receiver')
         if operator not in {binding[0] for binding in self.bindings}:
             raise ValueError('Operator is not configured')
-        self.video.publish(operator, rgb)
+        self.video.publish(operator, rgb, layout=layout, projections=projections)
 
     def snapshot(self):
         packet = np.zeros((len(self.bindings), 15), dtype=np.float32)

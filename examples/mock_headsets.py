@@ -35,7 +35,7 @@ try:
             rows[1][0] = min(max(seq-15, 0), 50) * .0003 * (1 if index == 0 else -1)
             rows[1][8] = int(seq >= 10)
             client.send(json.dumps(dict(version=1, seq=seq, controllers=rows)))
-            if json.loads(client.recv()) != {'ack':seq}:
+            if json.loads(client.recv()).get('ack') != seq:
                 raise RuntimeError('Unexpected acknowledgement')
         time.sleep(.04)
 finally:

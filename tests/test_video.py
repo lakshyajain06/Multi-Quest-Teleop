@@ -76,6 +76,36 @@ class VideoReturnTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await peer.close()
 
+    async def test_stereo_video_keeps_left_and_right_images_separate(self):
+        from aiortc import RTCPeerConnection, RTCConfiguration, RTCSessionDescription
+        from websockets.asyncio.client import connect
+        from multi_quest_teleop.stereo import fit_eye_projection
+        peer=RTCPeerConnection(RTCConfiguration(iceServers=[]))
+        ready=asyncio.get_running_loop().create_future()
+        peer.on('track',lambda track:ready.set_result(track))
+        try:
+            peer.addTransceiver('video',direction='recvonly')
+            await peer.setLocalDescription(await peer.createOffer())
+            with WebXRServer(['a:right'],host='127.0.0.1',port=0,video=True) as server:
+                async with connect(f'ws://127.0.0.1:{server.port}/input?operator=a') as socket:
+                    await socket.send(json.dumps(dict(type='video_offer',sdp=peer.localDescription.sdp)))
+                    answer=json.loads(await socket.recv())
+                    await peer.setRemoteDescription(RTCSessionDescription(type='answer',sdp=answer['sdp']))
+                    image=np.empty((48,128,3),np.uint8)
+                    image[:,:64]=[220,20,10];image[:,64:]=[10,20,220]
+                    source,_=fit_eye_projection([1,0,0,0,0,1,0,0,0,0,-1.001,-1,0,0,-.10005,0],64,48)
+                    server.publish_video('a',image,layout='stereo-sbs',projections={'left':source,'right':source})
+                    await socket.send(json.dumps(dict(version=1,seq=0,controllers=np.zeros((2,15)).tolist())))
+                    ack=json.loads(await socket.recv())
+                    self.assertEqual(ack['video']['layout'],'stereo-sbs')
+                    track=await asyncio.wait_for(ready,5)
+                    decoded=await asyncio.wait_for(track.recv(),10)
+                    rgb=decoded.to_ndarray(format='rgb24')
+                    np.testing.assert_allclose(rgb[:,2:62].mean(axis=(0,1)),[220,20,10],atol=12)
+                    np.testing.assert_allclose(rgb[:,66:126].mean(axis=(0,1)),[10,20,220],atol=12)
+        finally:
+            await peer.close()
+
     async def test_invalid_frames_are_rejected(self):
         from multi_quest_teleop.video import VideoReturn
         output=VideoReturn()

@@ -55,9 +55,12 @@ class MultiQuestDevice(DeviceBase):
         """Return (Z-up XYZW pose or None, continuity ID), separate from arm input."""
         return self.receiver.head_pose(operator)
 
-    def publish_video(self, operator, rgb):
+    def eye_views(self, operator):
+        return self.receiver.eye_views(operator)
+
+    def publish_video(self, operator, rgb, *, layout='mono', projections=None):
         """Send this operator an RGB frame from the application's selected camera."""
-        self.receiver.publish_video(operator, rgb)
+        self.receiver.publish_video(operator, rgb, layout=layout, projections=projections)
 
     def reset(self):
         """Disarm all bindings; consumers must release grip before moving again."""

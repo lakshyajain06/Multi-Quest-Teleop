@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const script = fs.readFileSync(require('node:path').join(__dirname, '../src/multi_quest_teleop/webxr.html'),'utf8').split('<script>')[1].split('</script>')[0];
 let now = 0, nextFrame, currentSession;
 const elements = Object.fromEntries(['token','operator','start','stop','status','view','server','certificate','video-enabled','video-status'].map(id=>[id,{value:'',removeAttribute(){}}]));
-const gl = {makeXRCompatible:async()=>{},bindFramebuffer(){},clearColor(){},clear(){}};
+const gl = {makeXRCompatible:async()=>{},bindFramebuffer(){},clearColor(){},clear(){},disable(){}};
 elements.view.getContext=()=>gl;
 class Socket {
   static OPEN=1; static all=[];

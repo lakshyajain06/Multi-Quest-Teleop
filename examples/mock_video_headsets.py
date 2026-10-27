@@ -10,6 +10,7 @@ import re
 import time
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 from aiortc import RTCPeerConnection, RTCConfiguration, RTCSessionDescription
 from websockets.asyncio.client import connect
 
@@ -35,8 +36,13 @@ async def operator_trial(operator, index, token, args):
                         rows[0,0]=-distance;rows[0,8]=float(seq>=10)
                     yaw=min(seq,50)*.002
                     head=[distance*4,1.6,0,0,float(np.sin(yaw/2)),0,float(np.cos(yaw/2)),1]
-                    await socket.send(json.dumps(dict(version=1,seq=seq,controllers=rows.tolist(),head=head)))
-                    if json.loads(await socket.recv()) != {'ack':seq}: raise RuntimeError('Invalid ACK')
+                    views=[]
+                    for eye,offset in [('left',-.032),('right',.032)]:
+                        position=np.array(head[:3])+Rotation.from_quat(head[3:7]).apply([offset,0,0])
+                        projection=[1.1,0,0,0,0,1.2,0,0,.1 if eye=='left' else -.1,.03,-1.001,-1,0,0,-.10005,0]
+                        views.append(dict(eye=eye,pose=[*position,*head[3:7]],projection=projection))
+                    await socket.send(json.dumps(dict(version=1,seq=seq,controllers=rows.tolist(),head=head,views=views)))
+                    if json.loads(await socket.recv()).get('ack') != seq: raise RuntimeError('Invalid ACK')
                     await asyncio.sleep(.04)
             async def video():
                 track=await asyncio.wait_for(track_future,10)

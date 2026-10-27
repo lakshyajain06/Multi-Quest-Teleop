@@ -44,6 +44,7 @@ class VideoReturn:
         self.fps = fps
         self.lock = threading.Lock()
         self.frames = {}
+        self.formats = {}
         self.published_at = {}
         self.peers = {}
         self.loop = None
@@ -54,15 +55,33 @@ class VideoReturn:
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
         self.thread.start()
 
-    def publish(self, operator, image):
+    def publish(self, operator, image, *, layout='mono', projections=None):
         image = np.asarray(image)
         if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
             raise ValueError('Video frames must be H x W x 3 uint8 RGB')
         if min(image.shape[:2]) < 2:
             raise ValueError('Video frames must be at least 2 x 2')
+        if layout not in ('mono', 'stereo-sbs'):
+            raise ValueError('Video layout must be mono or stereo-sbs')
+        metadata = {'layout': layout}
+        if layout == 'stereo-sbs':
+            if image.shape[1] % 2 or not projections or set(projections) != {'left','right'}:
+                raise ValueError('Stereo requires two equal-width eye images and source projections')
+            matrices = {}
+            for eye, projection in projections.items():
+                matrix = np.asarray(projection, dtype=float)
+                if matrix.shape != (16,) or not np.isfinite(matrix).all():
+                    raise ValueError('Invalid source projection')
+                matrices[eye] = matrix.tolist()
+            metadata['projections'] = matrices
         with self.lock:
+            self.formats[operator] = metadata
             self.frames[operator] = np.ascontiguousarray(image).copy()
             self.published_at[operator] = time.monotonic()
+
+    def format(self, operator):
+        with self.lock:
+            return self.formats.get(operator)
 
     def _frame(self, operator):
         with self.lock:
@@ -76,6 +95,7 @@ class VideoReturn:
             await peer.close()
         with self.lock:
             self.frames.pop(operator, None)
+            self.formats.pop(operator, None)
             self.published_at.pop(operator, None)
 
     async def _answer(self, operator, sdp):
