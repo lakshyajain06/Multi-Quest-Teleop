@@ -130,6 +130,21 @@ class WebXRServer:
             connection.close(1008, 'Operator already connected')
             return
         previous = -1
+        negotiation = None
+        def send_video_answer(future):
+            if future.cancelled():
+                return
+            try:
+                reply = future.result()
+            except Exception:
+                reply = {'type': 'video_error', 'message': 'Video negotiation failed'}
+            try:
+                with self.lock:
+                    owned = self.clients.get(operator) is connection
+                if owned:
+                    connection.send(json.dumps(reply))
+            except ConnectionClosed:
+                pass
         try:
             for raw in connection:
                 message = json.loads(raw)
@@ -140,10 +155,10 @@ class WebXRServer:
                     sdp = message.get('sdp')
                     if not isinstance(sdp, str) or len(sdp) > 60000:
                         raise ValueError('Invalid video offer')
-                    try:
-                        connection.send(json.dumps(self.video.answer(operator, sdp)))
-                    except Exception:
-                        connection.send(json.dumps({'type': 'video_error', 'message': 'Video negotiation failed'}))
+                    if negotiation is not None:
+                        raise ValueError('Only one video offer per connection is supported')
+                    negotiation = self.video.answer_async(operator, sdp)
+                    negotiation.add_done_callback(send_video_answer)
                     continue
                 seq = message['seq']
                 if message['version'] != 1 or type(seq) is not int or seq <= previous:
@@ -190,13 +205,17 @@ class WebXRServer:
         except (ValueError, TypeError, KeyError, ConnectionClosed):
             connection.close(1008, 'Invalid input or disconnected')
         finally:
-            with self.lock:
-                self.clients.pop(operator, None)
-                self.samples.pop(operator, None)
-                self.head_samples.pop(operator, None)
-                self.head_generations[operator] = self.head_generations.get(operator, 0) + 1
-            if self.video:
-                self.video.remove(operator)
+            if negotiation is not None and not negotiation.done():
+                negotiation.cancel()
+            try:
+                if self.video:
+                    self.video.remove(operator)
+            finally:
+                with self.lock:
+                    self.clients.pop(operator, None)
+                    self.samples.pop(operator, None)
+                    self.head_samples.pop(operator, None)
+                    self.head_generations[operator] = self.head_generations.get(operator, 0) + 1
 
     def head_pose(self, operator):
         """Latest Z-up XYZW head pose and continuity ID; (None, ID) if stale."""

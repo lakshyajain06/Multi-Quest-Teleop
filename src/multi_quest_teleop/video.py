@@ -92,13 +92,8 @@ class VideoReturn:
             await self._remove(operator)
             raise
 
-    def answer(self, operator, sdp):
-        future = asyncio.run_coroutine_threadsafe(self._answer(operator, sdp), self.loop)
-        try:
-            return future.result(timeout=15)
-        except BaseException:
-            future.cancel()
-            raise
+    def answer_async(self, operator, sdp):
+        return asyncio.run_coroutine_threadsafe(self._answer(operator, sdp), self.loop)
 
     def remove(self, operator):
         if self.loop and self.loop.is_running():
@@ -108,6 +103,13 @@ class VideoReturn:
         async def shutdown():
             for operator in list(self.peers):
                 await self._remove(operator)
+            # aiortc may still have ICE tasks scheduled after a peer closes
+            # during negotiation. This loop belongs solely to the video service.
+            pending = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
         if self.loop:
             asyncio.run_coroutine_threadsafe(shutdown(), self.loop).result(timeout=10)
             self.loop.call_soon_threadsafe(self.loop.stop)

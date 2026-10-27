@@ -53,6 +53,29 @@ class VideoReturnTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await asyncio.gather(*(peer.close() for peer in peers))
 
+    async def test_video_negotiation_does_not_block_controller_acknowledgements(self):
+        from aiortc import RTCPeerConnection, RTCConfiguration
+        from websockets.asyncio.client import connect
+        peer=RTCPeerConnection(RTCConfiguration(iceServers=[]))
+        try:
+            peer.addTransceiver('video',direction='recvonly')
+            await peer.setLocalDescription(await peer.createOffer())
+            with WebXRServer(['a:right'],host='127.0.0.1',port=0,video=True) as server:
+                original=server.video._answer
+                async def slow_answer(operator,sdp):
+                    await asyncio.sleep(1)
+                    return await original(operator,sdp)
+                server.video._answer=slow_answer
+                async with connect(f'ws://127.0.0.1:{server.port}/input?operator=a&token={server.token}') as socket:
+                    await socket.send(json.dumps(dict(type='video_offer',sdp=peer.localDescription.sdp)))
+                    await socket.send(json.dumps(dict(version=1,seq=0,controllers=np.zeros((2,15)).tolist())))
+                    reply=json.loads(await asyncio.wait_for(socket.recv(),.75))
+                    self.assertEqual(reply,{'ack':0})
+                    answer=json.loads(await asyncio.wait_for(socket.recv(),5))
+                    self.assertEqual(answer['type'],'video_answer')
+        finally:
+            await peer.close()
+
     async def test_invalid_frames_are_rejected(self):
         from multi_quest_teleop.video import VideoReturn
         output=VideoReturn()
