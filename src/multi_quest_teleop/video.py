@@ -1,5 +1,6 @@
 """Per-operator WebRTC output. Encoding runs off the simulation thread."""
 import asyncio
+from concurrent.futures import CancelledError
 from fractions import Fraction
 import threading
 import time
@@ -46,6 +47,7 @@ class VideoReturn:
         self.published_at = {}
         self.peers = {}
         self.loop = None
+        self.closing = False
 
     def start(self):
         self.loop = asyncio.new_event_loop()
@@ -96,10 +98,15 @@ class VideoReturn:
         return asyncio.run_coroutine_threadsafe(self._answer(operator, sdp), self.loop)
 
     def remove(self, operator):
-        if self.loop and self.loop.is_running():
-            asyncio.run_coroutine_threadsafe(self._remove(operator), self.loop).result(timeout=5)
+        if self.loop and self.loop.is_running() and not self.closing:
+            try:
+                asyncio.run_coroutine_threadsafe(self._remove(operator), self.loop).result(timeout=5)
+            except CancelledError:
+                if not self.closing:
+                    raise
 
     def close(self):
+        self.closing = True
         async def shutdown():
             for operator in list(self.peers):
                 await self._remove(operator)
