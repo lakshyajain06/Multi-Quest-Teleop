@@ -149,6 +149,19 @@ class WebXRTrials(unittest.TestCase):
                     connect(f'wss://localhost:{secure.port}/input?operator=a&token={secure.token}',
                             ssl=trusted,origin='https://untrusted.example')
 
+    def test_repeated_tls_handshakes_and_many_bindings(self):
+        operators=[f'operator{index}' for index in range(30)]
+        with tempfile.TemporaryDirectory() as folder:
+            cert,key=create_local_certificate('localhost',folder)
+            trusted=ssl.create_default_context(cafile=str(cert))
+            with WebXRServer([f'{op}:right' for op in operators],host='127.0.0.1',port=0,
+                             cert=cert,key=key) as receiver:
+                for operator in operators:
+                    with connect(f'wss://localhost:{receiver.port}/input?operator={operator}&token={receiver.token}',
+                                 ssl=trusted,open_timeout=2) as client:
+                        self.send(client,self.rows())
+                self.assertEqual(receiver.snapshot().shape,(30,15))
+
     def test_tls_page_and_wss(self):
         with tempfile.TemporaryDirectory() as directory:
             cert, key = Path(directory)/'cert.pem', Path(directory)/'key.pem'
