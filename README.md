@@ -34,7 +34,7 @@ with MultiQuestDevice(
     cert=cert, key=key,
     allowed_origins=["https://lakshyajain06.github.io"],
     yaw_degrees=[0, 180],
-    video=True, video_fps=20, video_bitrate=12_000_000,
+    video=True, video_fps=30, video_bitrate=24_000_000, video_codec="auto",
 ) as teleop:
     # Pairing is disabled by default. Enable require_pairing=True if desired.
     if teleop.token:
@@ -163,12 +163,12 @@ The video presentation remains fixed to the returned camera image, avoiding a
 second application of head rotation. This library does not command robot head
 joints or add them silently to an existing action/recording schema.
 
-The return path supports separate stereo eye views, with no depth reprojection
-or local head-pose prediction. The image is rendered using the latest received
-eye poses, so motion latency remains dependent on the simulation and network.
-It does not yet match native XR motion prediction/timewarp. The current codec
-uses CPU encoding; scaling to more high-resolution headsets will require GPU
-encoding and bandwidth measurements.
+The return path supports separate stereo eye views with frame-matched local
+rotational reprojection. Positional/depth reprojection and prediction are not
+implemented. Moving scene objects and headset translations still depend on fresh
+simulation frames, so native XR timing is not guaranteed. The automatic codec uses NVIDIA H.264 hardware encoding when runtime probing
+succeeds, with CPU VP8 as a fallback. Scaling to more headsets requires measuring
+render, encode, network, and decode costs.
 
 WebRTC signaling shares the control WebSocket; media uses direct
 LAN UDP ICE endpoints (dynamic UDP ports must be reachable). There are no STUN
@@ -241,7 +241,8 @@ if head is not None and eyes:
         projections[eye] = projection
     left, right = render_eye_camera("left"), render_eye_camera("right")
     teleop.publish_video("a", np.concatenate((left, right), axis=1),
-                        layout="stereo-sbs", projections=projections)
+                        layout="stereo-sbs", projections=projections,
+                        orientations={eye: eyes[eye]["pose"][3:7] for eye in ("left", "right")})
 ```
 
 `np`, `width`, `height`, and camera adapter functions above come from the
@@ -258,7 +259,7 @@ format in control acknowledgements. The client uses source × inverse(XR eye
 projection) to sample the correct pixels, rather than approximating eye alignment
 with an aspect-ratio fit. Source projections should be cached while unchanged.
 
-Refresh the hosted page after updating; it displays **Client 0.4**. Old mono
+Refresh the hosted page after updating; it displays **Client 0.5**. Old mono
 clients do not send the eye views needed for world stereo. Stereo doubles the
 pixel count at a given per-eye resolution. Actual Quest binocular fusion and
 motion comfort still require a physical headset check.
@@ -266,14 +267,14 @@ motion comfort still require a physical headset check.
 
 ## Image quality (0.4)
 
-The library defaults to a 12 Mbps ceiling for each operator's combined stereo
-stream. Set `video_bitrate=...` (bits/second) on `MultiQuestDevice` or
+The current library defaults to a 24 Mbps ceiling for each operator's combined
+stereo stream (12 Mbps in version 0.4). Set `video_bitrate=...` (bits/second) on `MultiQuestDevice` or
 `WebXRServer` to change it. The sender starts at that budget and can reduce it
 in response to receiver bandwidth estimates. This is a ceiling, not a guaranteed
 measured throughput. The page displays received pixel dimensions per eye.
 
-The consuming Ultra application now defaults to 1024x1024 **per eye** instead of
-640x480, packed as 2048x1024. Its recorded robot-camera resolutions remain
+Version 0.4 of the consuming Ultra application used 1024x1024 per eye; the current
+low-latency profile uses 1280x1280 per eye, packed as 2560x1280. Its recorded robot-camera resolutions remain
 independent. Larger frame sizes require more render/encode time and bandwidth;
 benchmark frame rate alongside visual detail. CPU VP8 encoding is still used.
 
@@ -289,3 +290,48 @@ actual decoded pixels against the source. It measured about 22 dB PSNR with the
 stock starting budget and 43 dB with the new budget in the local test setup.
 That synthetic result demonstrates reduced compression loss; it does not
 measure headset optics, motion latency, or subjective VR quality.
+
+
+## Lower head-motion latency (0.5)
+
+`video_codec="auto"` probes NVIDIA H.264 encoding and uses it when available;
+`"nvenc"` requires it, and `"vp8"` selects the CPU fallback explicitly. H.264 uses
+ultra-low-latency tuning, no B frames, no lookahead, and a small rate-control
+buffer. Variable bitrate avoids sending filler data for static scenes. Codec
+preferences are applied before remote SDP negotiation, and the encoder adapter
+is guarded to aiortc 1.15.0. The server prints the encoder actually selected.
+The default video ceiling is now 24 Mbps, with a 30 fps output cap.
+
+For world stereo, supply `orientations={"left": ..., "right": ...}` alongside
+source projections in `publish_video()`. These must be the Z-up **tracking**
+quaternions returned by `eye_views()`, corresponding to the camera poses used to
+render that exact frame. Do not supply transformed simulation-world quaternions.
+The source slot captures image and metadata together; pacing selects the latest
+slot after sleeping, so stale queued images do not accumulate.
+
+The client opens an unordered, non-retransmitted `frame-meta` data channel. The
+encoder maps frame metadata to the actual RTP timestamp. The browser captures
+the video texture in `requestVideoFrameCallback` and uses its `rtpTimestamp` to
+look up matching render orientations. Each XR frame applies rendered-eye inverse
+rotation × current-eye rotation when sampling that image. Metadata from another
+frame is never applied. When matching metadata or the browser callback field is
+unavailable, stereo presentation continues without the local rotation correction.
+The first encoded frame also uses this fallback while the RTP origin is learned.
+
+This reduces rotational waiting without synthesizing positional motion or moving
+objects. The symmetric source frustum includes a 15% overscan margin. Fast turns
+can still reveal missing image edges. Mono robot-camera feeds are not rotated
+again, preserving the future head-joint-control camera contract.
+
+Client 0.5 shows received resolution, frame rate when available, **GPU** for NVENC,
+and **local head rotation** when a matching frame is being reprojected. The Ultra
+application defaults to 1280x1280 per eye and renders once per control step while
+retaining both physics substeps. Its terminal also prints render/physics and
+encode timings. Keep recording-camera resolution and task action mappings in the
+application.
+
+Local codec benchmark on this workstation, using a repeatable detailed
+2560x1280 moving image: warm median encode time was about 7 ms with NVENC and
+10 ms with CPU VP8. These are encoder timings, not end-to-end headset latency.
+The bigger latency changes are avoiding redundant renders and applying head
+rotation locally. Physical Quest measurements remain necessary.

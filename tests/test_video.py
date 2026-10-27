@@ -14,7 +14,7 @@ class VideoReturnTests(unittest.IsolatedAsyncioTestCase):
     async def test_two_operators_receive_their_own_frames_and_send_heads(self):
         from aiortc import RTCPeerConnection, RTCConfiguration, RTCSessionDescription
         from websockets.asyncio.client import connect
-        with WebXRServer(['a:right','b:right'],host='127.0.0.1',port=0,video=True) as server:
+        with WebXRServer(['a:right','b:right'],host='127.0.0.1',port=0,video=True,video_codec='vp8') as server:
             peers=[]; receivers=[]
             try:
                 async with AsyncExitStack() as stack:
@@ -60,7 +60,7 @@ class VideoReturnTests(unittest.IsolatedAsyncioTestCase):
         try:
             peer.addTransceiver('video',direction='recvonly')
             await peer.setLocalDescription(await peer.createOffer())
-            with WebXRServer(['a:right'],host='127.0.0.1',port=0,video=True) as server:
+            with WebXRServer(['a:right'],host='127.0.0.1',port=0,video=True,video_codec='vp8') as server:
                 original=server.video._answer
                 async def slow_answer(operator,sdp):
                     await asyncio.sleep(1)
@@ -73,6 +73,11 @@ class VideoReturnTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(reply,{'ack':0})
                     answer=json.loads(await asyncio.wait_for(socket.recv(),5))
                     self.assertEqual(answer['type'],'video_answer')
+                    from aiortc import RTCSessionDescription
+                    await peer.setRemoteDescription(RTCSessionDescription(type='answer',sdp=answer['sdp']))
+                    for _ in range(100):
+                        if peer.connectionState in ('connected','failed'): break
+                        await asyncio.sleep(.01)
         finally:
             await peer.close()
 
@@ -86,7 +91,7 @@ class VideoReturnTests(unittest.IsolatedAsyncioTestCase):
         try:
             peer.addTransceiver('video',direction='recvonly')
             await peer.setLocalDescription(await peer.createOffer())
-            with WebXRServer(['a:right'],host='127.0.0.1',port=0,video=True) as server:
+            with WebXRServer(['a:right'],host='127.0.0.1',port=0,video=True,video_codec='vp8') as server:
                 async with connect(f'ws://127.0.0.1:{server.port}/input?operator=a') as socket:
                     await socket.send(json.dumps(dict(type='video_offer',sdp=peer.localDescription.sdp)))
                     answer=json.loads(await socket.recv())
@@ -115,17 +120,63 @@ class VideoReturnTests(unittest.IsolatedAsyncioTestCase):
         try:
             peer.addTransceiver('video',direction='recvonly')
             await peer.setLocalDescription(await peer.createOffer())
-            with WebXRServer(['a:right'],host='127.0.0.1',port=0,video=True,video_bitrate=12_000_000) as server:
+            with WebXRServer(['a:right'],host='127.0.0.1',port=0,video=True,video_bitrate=24_000_000) as server:
                 async with connect(f'ws://127.0.0.1:{server.port}/input?operator=a') as socket:
                     await socket.send(json.dumps(dict(type='video_offer',sdp=peer.localDescription.sdp)))
                     answer=json.loads(await socket.recv())
-                    self.assertIn('VP8',answer['sdp'])
+                    self.assertIn('H264' if server.video.codec=='nvenc' else 'VP8',answer['sdp'])
+                    if server.video.codec=='nvenc': self.assertNotIn('VP8',answer['sdp'])
                     await peer.setRemoteDescription(RTCSessionDescription(type='answer',sdp=answer['sdp']))
-                    image=np.empty((1024,2048,3),np.uint8);image[:,:1024]=[220,20,10];image[:,1024:]=[10,20,220]
+                    image=np.empty((1280,2560,3),np.uint8);image[:,:1280]=[220,20,10];image[:,1280:]=[10,20,220]
                     server.publish_video('a',image)
                     track=await asyncio.wait_for(ready,5)
                     frame=await asyncio.wait_for(track.recv(),10)
-                    self.assertEqual((frame.width,frame.height),(2048,1024))
+                    self.assertEqual((frame.width,frame.height),(2560,1280))
+        finally:
+            await peer.close()
+
+    async def test_rotation_metadata_matches_decoded_rtp_timestamps(self):
+        await self.check_rotation_metadata('vp8')
+
+    async def test_nvenc_rotation_metadata_matches_decoded_frames(self):
+        from multi_quest_teleop.encoder import choose_codec
+        if choose_codec() != 'nvenc':
+            self.skipTest('NVENC not available on this host')
+        await self.check_rotation_metadata('nvenc')
+
+    async def check_rotation_metadata(self, codec):
+        from aiortc import RTCPeerConnection, RTCConfiguration, RTCSessionDescription
+        from websockets.asyncio.client import connect
+        from multi_quest_teleop.stereo import fit_eye_projection
+        peer=RTCPeerConnection(RTCConfiguration(iceServers=[]))
+        ready=asyncio.get_running_loop().create_future();metadata={}
+        peer.on('track',lambda track:ready.set_result(track))
+        channel=peer.createDataChannel('frame-meta',ordered=False,maxRetransmits=0)
+        channel.on('message',lambda raw:metadata.update({json.loads(raw)['rtpTimestamp']:json.loads(raw)}))
+        try:
+            peer.addTransceiver('video',direction='recvonly')
+            await peer.setLocalDescription(await peer.createOffer())
+            with WebXRServer(['a:right'],host='127.0.0.1',port=0,video=True,video_codec=codec) as server:
+                async with connect(f'ws://127.0.0.1:{server.port}/input?operator=a') as socket:
+                    await socket.send(json.dumps(dict(type='video_offer',sdp=peer.localDescription.sdp)))
+                    answer=json.loads(await socket.recv())
+                    await peer.setRemoteDescription(RTCSessionDescription(type='answer',sdp=answer['sdp']))
+                    image=np.full((256,512,3),120,np.uint8)
+                    source,_=fit_eye_projection([1,0,0,0,0,1,0,0,0,0,-1.001,-1,0,0,-.10005,0],256,256)
+                    server.publish_video('a',image,layout='stereo-sbs',projections={'left':source,'right':source},
+                                         orientations={'left':[.70710678,0,0,.70710678],'right':[.70710678,0,0,.70710678]})
+                    track=await asyncio.wait_for(ready,5);matches=0
+                    for _ in range(5):
+                        frame=await asyncio.wait_for(track.recv(),5)
+                        origin=peer.getTransceivers()[0].receiver._RTCRtpReceiver__timestamp_mapper._origin
+                        timestamp=(origin+frame.pts)&0xffffffff
+                        for _ in range(10):
+                            if timestamp in metadata: break
+                            await asyncio.sleep(.01)
+                        if timestamp in metadata:
+                            np.testing.assert_allclose(metadata[timestamp]['video']['orientations']['left'],[0,0,0,1],atol=1e-6)
+                            matches+=1
+                    self.assertGreaterEqual(matches,2)
         finally:
             await peer.close()
 

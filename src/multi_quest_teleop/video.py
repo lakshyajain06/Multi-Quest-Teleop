@@ -9,7 +9,7 @@ import numpy as np
 from aiortc import RTCPeerConnection, RTCConfiguration, RTCSessionDescription, RTCRtpSender, VideoStreamTrack
 from av import VideoFrame
 
-from .encoder import configure_sender
+from .encoder import configure_sender, choose_codec
 
 
 class _LatestVideoTrack(VideoStreamTrack):
@@ -28,7 +28,15 @@ class _LatestVideoTrack(VideoStreamTrack):
             self.deadline = now
         await asyncio.sleep(max(0, self.deadline - now))
         self.deadline = max(self.deadline + 1 / self.fps, time.monotonic())
+        # Read the newest frame after pacing, rather than encoding one selected
+        # before the sleep. The slot is bounded even if rendering outruns encoding.
+        record = self.frame_getter()
+        if record is not None:
+            image, metadata = record
+        else:
+            image, metadata = image
         frame = VideoFrame.from_ndarray(image, format='rgb24')
+        frame.opaque = metadata
         frame.pts = int((time.monotonic() - self.started) * 90000)
         frame.time_base = Fraction(1, 90000)
         return frame
@@ -40,16 +48,19 @@ class VideoReturn:
     publish() accepts RGB uint8 frames from any source. Camera placement and
     head-joint actions remain application concerns. ICE is LAN-only by default.
     """
-    def __init__(self, fps=20, bitrate=12_000_000):
+    def __init__(self, fps=30, bitrate=24_000_000, codec='auto'):
         if not 1 <= fps <= 60:
             raise ValueError('Video fps must be between 1 and 60')
         if not 250_000 <= bitrate <= 100_000_000:
             raise ValueError('Video bitrate must be between 250 kbps and 100 Mbps')
+        self.codec = choose_codec(codec)
         self.bitrate = int(bitrate)
         self.fps = fps
         self.lock = threading.Lock()
         self.frames = {}
         self.formats = {}
+        self.channels = {}
+        self.encoder_stats = {}
         self.published_at = {}
         self.peers = {}
         self.loop = None
@@ -60,7 +71,7 @@ class VideoReturn:
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
         self.thread.start()
 
-    def publish(self, operator, image, *, layout='mono', projections=None):
+    def publish(self, operator, image, *, layout='mono', projections=None, orientations=None):
         image = np.asarray(image)
         if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
             raise ValueError('Video frames must be H x W x 3 uint8 RGB')
@@ -79,6 +90,14 @@ class VideoReturn:
                     raise ValueError('Invalid source projection')
                 matrices[eye] = matrix.tolist()
             metadata['projections'] = matrices
+        if orientations is not None:
+            from scipy.spatial.transform import Rotation
+            # Convert Z-up tracking quaternions back to native WebXR tracking.
+            basis = Rotation.from_euler('x',-90,degrees=True)
+            metadata['orientations'] = {
+                eye: (basis * Rotation.from_quat(value)).as_quat().tolist()
+                for eye,value in orientations.items()
+            }
         with self.lock:
             self.formats[operator] = metadata
             self.frames[operator] = np.ascontiguousarray(image).copy()
@@ -92,7 +111,10 @@ class VideoReturn:
         with self.lock:
             if time.monotonic() - self.published_at.get(operator, 0) > 2.0:
                 return None
-            return self.frames.get(operator)
+            image = self.frames.get(operator)
+            if image is None:
+                return None
+            return image, {'video': self.formats[operator], 'published_at': self.published_at[operator]}
 
     async def _remove(self, operator):
         peer = self.peers.pop(operator, None)
@@ -101,6 +123,8 @@ class VideoReturn:
         with self.lock:
             self.frames.pop(operator, None)
             self.formats.pop(operator, None)
+            self.channels.pop(operator, None)
+            self.encoder_stats.pop(operator, None)
             self.published_at.pop(operator, None)
 
     async def _answer(self, operator, sdp):
@@ -110,17 +134,31 @@ class VideoReturn:
             await previous.close()
         peer = RTCPeerConnection(RTCConfiguration(iceServers=[]))
         self.peers[operator] = peer
+        @peer.on('datachannel')
+        def on_channel(channel):
+            if channel.label == 'frame-meta':
+                self.channels[operator] = channel
+        def encoded(timestamp, metadata, elapsed_ms, bitrate):
+            with self.lock:
+                self.encoder_stats[operator] = {'codec':self.codec, 'encode_ms':elapsed_ms, 'bitrate':bitrate}
+            if timestamp is not None and metadata and metadata.get('video',{}).get('orientations'):
+                def deliver():
+                    import json
+                    channel = self.channels.get(operator)
+                    if channel and channel.readyState == 'open' and channel.bufferedAmount < 65536:
+                        channel.send(json.dumps({'rtpTimestamp':timestamp,'video':metadata['video']}))
+                self.loop.call_soon_threadsafe(deliver)
         try:
-            await peer.setRemoteDescription(RTCSessionDescription(sdp=sdp, type='offer'))
             sender = peer.addTrack(_LatestVideoTrack(lambda: self._frame(operator), self.fps))
             transceiver = next(item for item in peer.getTransceivers() if item.sender is sender)
             transceiver.setCodecPreferences([
                 codec for codec in RTCRtpSender.getCapabilities('video').codecs
-                if codec.mimeType.lower() in ('video/vp8', 'video/rtx')
+                if codec.mimeType.lower() in (('video/h264', 'video/rtx') if self.codec == 'nvenc' else ('video/vp8', 'video/rtx'))
             ])
-            configure_sender(sender, self.bitrate)
+            configure_sender(sender, self.bitrate, self.codec, self.fps, encoded)
+            await peer.setRemoteDescription(RTCSessionDescription(sdp=sdp, type='offer'))
             await peer.setLocalDescription(await peer.createAnswer())
-            return {'type': 'video_answer', 'sdp': peer.localDescription.sdp}
+            return {'type': 'video_answer', 'sdp': peer.localDescription.sdp, 'codec':self.codec}
         except BaseException:
             await self._remove(operator)
             raise

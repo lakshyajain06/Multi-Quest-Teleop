@@ -3,7 +3,7 @@
 <title>Quest teleoperation</title>
 <style>body{font:20px system-ui;max-width:700px;margin:3rem auto;padding:1rem;background:#14202b;color:#edf5ff}input,button{font:inherit;padding:.6rem;margin:.4rem;max-width:90%}label{display:block}#status{white-space:pre-wrap}</style>
 <h1>Quest teleoperation</h1>
-<p>Client 0.4 · stereo world view</p>
+<p>Client 0.5 · stereo world view</p>
 <p>Connect each headset with its assigned operator ID. Release grip once, then hold grip to move. Trigger controls the gripper. The simulation video appears in the headset when video is enabled on the workstation.</p>
 <label>Workstation address <input id="server" placeholder="https://192.168.1.100:8443" autocomplete="off"></label>
 <p><a id="certificate" target="_blank" rel="noopener noreferrer" style="color:#8ed7ff">Accept workstation certificate</a> once, then return here. Allow local network access if the browser asks.</p>
@@ -37,6 +37,8 @@ $('operator').value = params.get('operator') || 'a';
 let socket, session, sequence = 0, outstanding = null, sentAt = 0;
 let peer, videoElement, videoRenderer, videoProgressAt=0, videoTime=-1;
 let videoFormat={layout:'mono'};
+const frameMetadata=new Map();
+let activeCodec='',statsText='',lastStatsAt=0,statsPending=false,previousStats=null;
 function inverseMatrix(matrix) {
   const rows=Array.from({length:4},(_,r)=>Array.from({length:8},(_,c)=>c<4 ? matrix[c*4+r] : Number(c-4===r)));
   for (let col=0;col<4;col++) {
@@ -49,12 +51,24 @@ function inverseMatrix(matrix) {
   }
   return Array.from({length:16},(_,i)=>rows[i%4][4+Math.floor(i/4)]);
 }
-function projectionMap(source,target) {
-  const inverse=inverseMatrix(target);
+function multiplyMatrix(a,b) {
   return new Float32Array(Array.from({length:16},(_,i)=>{
     const r=i%4,c=Math.floor(i/4);
-    return [0,1,2,3].reduce((sum,k)=>sum+source[k*4+r]*inverse[c*4+k],0);
+    return [0,1,2,3].reduce((sum,k)=>sum+a[k*4+r]*b[c*4+k],0);
   }));
+}
+function relativeRotation(rendered,current) {
+  const [x,y,z,w]=rendered, c=current;
+  const q=[w*c.x-x*c.w-y*c.z+z*c.y,w*c.y+x*c.z-y*c.w-z*c.x,
+           w*c.z-x*c.y+y*c.x-z*c.w,w*c.w+x*c.x+y*c.y+z*c.z];
+  const norm=Math.hypot(...q);const [a,b,d,e]=q.map(value=>value/norm);
+  return [1-2*b*b-2*d*d,2*a*b+2*d*e,2*a*d-2*b*e,0,
+          2*a*b-2*d*e,1-2*a*a-2*d*d,2*b*d+2*a*e,0,
+          2*a*d+2*b*e,2*b*d-2*a*e,1-2*a*a-2*b*b,0,0,0,0,1];
+}
+function projectionMap(source,target,rotation) {
+  const inverse=inverseMatrix(target);
+  return multiplyMatrix(source,rotation ? multiplyMatrix(rotation,inverse) : inverse);
 }
 function createVideoRenderer(gl) {
   const shader = (type, code) => {
@@ -74,16 +88,38 @@ function createVideoRenderer(gl) {
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  let managed=false,hasTexture=false,disposed=false,stamp=null,callback=null,attachedVideo=null,reprojecting=false;
+  function upload(video) {
+    gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,video);
+    hasTexture=true;
+  }
   return {
+    get reprojecting() {return reprojecting;},
+    attach(video) {
+      attachedVideo=video;managed=typeof video.requestVideoFrameCallback==='function';
+      if(managed) {
+        const frame=(now,metadata)=>{
+          if(disposed) return;
+          upload(video);
+          stamp=Number.isInteger(metadata.rtpTimestamp) ? metadata.rtpTimestamp>>>0 : null;
+          callback=video.requestVideoFrameCallback(frame);
+        };
+        callback=video.requestVideoFrameCallback(frame);
+      }
+    },
     draw(video, views, layer, format) {
-      if (!video || video.readyState < 2 || !views) return;
+      if (!video || video.readyState < 2 || !views || (managed && !hasTexture)) return;
+      const matched=stamp===null ? null : frameMetadata.get(stamp);
+      format=matched?.video || format;
+      reprojecting=Boolean(matched?.video?.orientations && format.layout==='stereo-sbs');
       gl.useProgram(program); gl.disable(gl.DEPTH_TEST);
       gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
       const position=gl.getAttribLocation(program,'p'); gl.enableVertexAttribArray(position);
       gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,texture);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
-      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,video);
+      if(!managed) upload(video);
       gl.uniform1i(gl.getUniformLocation(program,'image'),0);
       for (const view of views) {
         const viewport=layer.getViewport(view);
@@ -97,17 +133,32 @@ function createVideoRenderer(gl) {
         gl.uniform2f(gl.getUniformLocation(program,'eyeRange'),stereo && view.eye==='right' ? .5 : 0,stereo ? .5 : 1);
         gl.uniform2f(gl.getUniformLocation(program,'texel'),(stereo ? 2 : 1)/video.videoWidth,1/video.videoHeight);
         if(stereo) gl.uniformMatrix4fv(gl.getUniformLocation(program,'projectionMap'),false,
-                                     projectionMap(format.projections[view.eye],view.projectionMatrix));
+                                     projectionMap(format.projections[view.eye],view.projectionMatrix,
+                                       matched?.video?.orientations?.[view.eye] && view.transform?.orientation
+                                         ? relativeRotation(matched.video.orientations[view.eye],view.transform.orientation) : null));
         gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
       }
       gl.disable(gl.SCISSOR_TEST);
     },
-    dispose() {gl.deleteTexture(texture);gl.deleteBuffer(buffer);gl.deleteProgram(program);}
+    dispose() {disposed=true;if(callback!==null && attachedVideo?.cancelVideoFrameCallback) attachedVideo.cancelVideoFrameCallback(callback);gl.deleteTexture(texture);gl.deleteBuffer(buffer);gl.deleteProgram(program);}
   };
 }
 async function startVideo(activeSocket) {
   const activePeer = new RTCPeerConnection({iceServers:[]}); peer=activePeer;
-  videoElement=document.createElement('video'); videoElement.muted=true; videoElement.autoplay=true; videoElement.playsInline=true;
+  if(typeof activePeer.createDataChannel==='function') {
+    const metadata=activePeer.createDataChannel('frame-meta',{ordered:false,maxRetransmits:0});
+    metadata.onmessage=event=>{
+      if(peer!==activePeer) return;
+      try {
+        const info=JSON.parse(event.data);
+        if(Number.isInteger(info.rtpTimestamp) && info.video) {
+          frameMetadata.set(info.rtpTimestamp>>>0,info);
+          while(frameMetadata.size>120) frameMetadata.delete(frameMetadata.keys().next().value);
+        }
+      } catch {}
+    };
+  }
+  videoElement=document.createElement('video'); videoElement.muted=true; videoElement.autoplay=true; videoElement.playsInline=true;videoRenderer?.attach(videoElement);
   activePeer.ontrack=event=>{
     if (peer !== activePeer) return;
     videoElement.srcObject=new MediaStream([event.track]);
@@ -133,12 +184,25 @@ async function startVideo(activeSocket) {
 function showVideoResolution() {
   if (videoElement?.readyState >= 2) {
     const stereo=videoFormat.layout==='stereo-sbs';
-    $('video-status').textContent=`Video: ${Math.round(videoElement.videoWidth/(stereo ? 2 : 1))}×${videoElement.videoHeight}${stereo ? ' per eye' : ''}`;
+    $('video-status').textContent=`Video: ${Math.round(videoElement.videoWidth/(stereo ? 2 : 1))}×${videoElement.videoHeight}${stereo ? ' per eye' : ''}${activeCodec==='nvenc' ? ' · GPU' : ''}${statsText}${videoRenderer?.reprojecting ? ' · local head rotation' : ''}`;
+    const now=performance.now();
+    if(peer && typeof peer.getStats==='function' && !statsPending && now-lastStatsAt>1000) {
+      const owner=peer;lastStatsAt=now;statsPending=true;
+      owner.getStats().then(report=>{
+        if(peer!==owner) return;
+        for(const stat of report.values()) if(stat.type==='inbound-rtp' && stat.kind==='video') {
+          let fps=stat.framesPerSecond;
+          if(fps===undefined && previousStats) fps=(stat.framesDecoded-previousStats.frames)/(now-previousStats.time)*1000;
+          previousStats={frames:stat.framesDecoded,time:now};
+          if(Number.isFinite(fps)) statsText=` · ${fps.toFixed(1)} fps`;
+        }
+      }).catch(()=>{}).finally(()=>{statsPending=false;});
+    }
   }
 }
 function status(text) { $('status').textContent = text; }
 async function stop() {
-  const oldSession = session; session = null;videoFormat={layout:'mono'};
+  const oldSession = session; session = null;videoFormat={layout:'mono'};frameMetadata.clear();activeCodec='';statsText='';previousStats=null;
   if (peer) {peer.close();peer=null;}
   if (videoElement) {videoElement.pause();videoElement.srcObject=null;videoElement=null;}
   if (videoRenderer) {videoRenderer.dispose();videoRenderer=null;}
@@ -179,6 +243,7 @@ $('start').onclick = async () => {
       if (socket !== activeSocket) return;
       const reply = JSON.parse(event.data);
       if (reply.video) {videoFormat=reply.video;showVideoResolution();}
+      if (reply.type === 'video_answer') activeCodec=reply.codec || '';
       if (reply.type === 'video_answer' && peer) peer.setRemoteDescription({type:'answer',sdp:reply.sdp}).catch(error=>{$('video-status').textContent=error.message;});
       if (reply.type === 'video_error') {stop();status(reply.message);}
       if (reply.ack === outstanding) outstanding = null;

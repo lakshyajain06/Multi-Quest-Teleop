@@ -2,7 +2,7 @@
 import numpy as np
 
 
-def fit_eye_projection(projection, width, height, near=.05, far=100.):
+def fit_eye_projection(projection, width, height, near=.05, far=100., overscan=1.15):
     """Return (symmetric source projection, K) covering the XR eye frustum.
 
     WebXR matrices are column-major. Isaac Lab's basic USD camera path cannot
@@ -17,7 +17,9 @@ def fit_eye_projection(projection, width, height, near=.05, far=100.):
         raise ValueError('Invalid eye projection or render dimensions')
     slopes = rays[:, :2] / -rays[:, 2:3]
     limits = np.max(np.abs(slopes), axis=0)
-    focal = min(width / (2 * limits[0]), height / (2 * limits[1]))
+    if not 1 <= overscan <= 2:
+        raise ValueError('Overscan must be in [1, 2]')
+    focal = min(width / (2 * limits[0]), height / (2 * limits[1])) / overscan
     intrinsic = np.array([[focal, 0, width / 2], [0, focal, height / 2], [0, 0, 1]], dtype=np.float32)
     source = np.array([[2*focal/width,0,0,0], [0,2*focal/height,0,0],
                        [0,0,-(far+near)/(far-near),-2*far*near/(far-near)], [0,0,-1,0]], dtype=float)

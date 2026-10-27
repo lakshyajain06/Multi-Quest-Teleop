@@ -58,7 +58,7 @@ class WebXRServer:
     """
 
     def __init__(self, bindings, host='0.0.0.0', port=8443, cert=None, key=None,
-                 timeout=0.25, yaw_degrees=None, token=None, allowed_origins=(), video=False, video_fps=20, require_pairing=False, video_bitrate=12_000_000):
+                 timeout=0.25, yaw_degrees=None, token=None, allowed_origins=(), video=False, video_fps=30, require_pairing=False, video_bitrate=24_000_000, video_codec='auto'):
         if not bindings or timeout <= 0 or not np.isfinite(timeout):
             raise ValueError('At least one binding and a positive finite timeout are required')
         if yaw_degrees is None:
@@ -87,7 +87,7 @@ class WebXRServer:
         self.video = None
         if video:
             from .video import VideoReturn
-            self.video = VideoReturn(fps=video_fps, bitrate=video_bitrate)
+            self.video = VideoReturn(fps=video_fps, bitrate=video_bitrate, codec=video_codec)
         self.context = None
         if bool(cert) != bool(key):
             raise ValueError('Supply both TLS certificate and key')
@@ -275,12 +275,12 @@ class WebXRServer:
             view['pose'][3:] = (basis * Rotation.from_quat(view['pose'][3:])).as_quat()
         return eyes
 
-    def publish_video(self, operator, rgb, *, layout='mono', projections=None):
+    def publish_video(self, operator, rgb, *, layout='mono', projections=None, orientations=None):
         if not self.video:
             raise RuntimeError('Enable video when constructing this receiver')
         if operator not in {binding[0] for binding in self.bindings}:
             raise ValueError('Operator is not configured')
-        self.video.publish(operator, rgb, layout=layout, projections=projections)
+        self.video.publish(operator, rgb, layout=layout, projections=projections, orientations=orientations)
 
     def snapshot(self):
         packet = np.zeros((len(self.bindings), 15), dtype=np.float32)
@@ -307,6 +307,7 @@ class WebXRServer:
                             compression=None, close_timeout=1)
         if self.video:
             self.video.start()
+            print(f"Video encoder: {self.video.codec}",flush=True)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.port = self.server.socket.getsockname()[1]

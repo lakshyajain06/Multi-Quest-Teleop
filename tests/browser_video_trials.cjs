@@ -9,7 +9,7 @@ const gl=new Proxy({makeXRCompatible:async()=>{},getShaderParameter:()=>true,get
  uniformMatrix4fv:(_,transpose,matrix)=>matrices.push(Array.from(matrix)),
  drawArrays:()=>draws++,texImage2D:()=>uploads++},{get:(target,key)=>target[key] || (()=>({}))});
 elements.view.getContext=()=>gl;
-const video={readyState:2,videoWidth:640,videoHeight:480,play:async()=>{},pause(){}};
+const video={readyState:2,videoWidth:640,videoHeight:480,play:async()=>{},pause(){},requestVideoFrameCallback(callback){this.callback=callback;return 1;},cancelVideoFrameCallback(){}};
 class Socket {
  static OPEN=1;static all=[];
  constructor(){this.readyState=1;this.sent=[];Socket.all.push(this);}
@@ -18,6 +18,7 @@ class Socket {
 class Peer {
  static all=[];
  constructor(){this.iceGatheringState='complete';Peer.all.push(this);}
+ createDataChannel(){this.channel={};return this.channel;}
  addTransceiver(kind,options){assert.equal(kind,'video');assert.equal(options.direction,'recvonly');}
  async createOffer(){return {type:'offer',sdp:'offer-sdp'};}
  async setLocalDescription(value){this.localDescription=value;}
@@ -35,6 +36,7 @@ vm.createContext(context);vm.runInContext(script,context);
  socket.onmessage({data:JSON.stringify({type:'video_answer',sdp:'answer-sdp'})});
  assert.equal(Peer.all[0].remoteDescription.sdp,'answer-sdp');
  Peer.all[0].ontrack({track:{}});await new Promise(setImmediate);
+ video.callback(0,{rtpTimestamp:100});
  nextFrame(0,{getViewerPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:0,z:0,w:1}},views:[{},{}]})});
  assert.equal(draws,2);assert.equal(uploads,1);
  assert.deepEqual(Array.from(socket.sent[1].head),[1,2,3,0,0,0,1,1]);
@@ -49,6 +51,15 @@ vm.createContext(context);vm.runInContext(script,context);
  assert.equal(socket.sent.at(-1).views.length,2);
  assert.equal(socket.sent.at(-1).views[0].eye,'left');
  assert.match(elements['video-status'].textContent,/320×480 per eye/);
+ const yaw=10*Math.PI/180;
+ // Metadata for a different decoded frame must never affect this texture.
+ Peer.all[0].channel.onmessage({data:JSON.stringify({rtpTimestamp:99,video:{layout:'stereo-sbs',projections:{left:projection,right:projection},orientations:{left:[0,Math.sin(yaw/2),0,Math.cos(yaw/2)],right:[0,Math.sin(yaw/2),0,Math.cos(yaw/2)]}}})});
+ nextFrame(0,{getViewerPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:0,z:0,w:1}},views:[eyeView('left',.968),eyeView('right',1.032)]})});
+ assert.equal(vm.runInContext('videoRenderer.reprojecting',context),false);
+ Peer.all[0].channel.onmessage({data:JSON.stringify({rtpTimestamp:100,video:{layout:'stereo-sbs',projections:{left:projection,right:projection},orientations:{left:[0,Math.sin(yaw/2),0,Math.cos(yaw/2)],right:[0,Math.sin(yaw/2),0,Math.cos(yaw/2)]}}})});
+ nextFrame(0,{getViewerPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:0,z:0,w:1}},views:[eyeView('left',.968),eyeView('right',1.032)]})});
+ assert.equal(vm.runInContext('videoRenderer.reprojecting',context),true);
+ const warped=matrices.at(-1);assert.ok(Math.abs((warped[8]+warped[12])/(warped[11]+warped[15])-Math.tan(yaw))<1e-5);
  const asymmetric=projection.slice();asymmetric[8]=.2;asymmetric[9]=-.1;
  const remap=vm.runInContext(`projectionMap(${JSON.stringify(projection)},${JSON.stringify(asymmetric)})`,context);
  assert.ok(Math.abs(remap[12]-.2)<1e-6);assert.ok(Math.abs(remap[13]+.1)<1e-6);
