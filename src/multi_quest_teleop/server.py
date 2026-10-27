@@ -58,7 +58,7 @@ class WebXRServer:
     """
 
     def __init__(self, bindings, host='0.0.0.0', port=8443, cert=None, key=None,
-                 timeout=0.25, yaw_degrees=None, token=None, allowed_origins=(), video=False, video_fps=20, require_pairing=False):
+                 timeout=0.25, yaw_degrees=None, token=None, allowed_origins=(), video=False, video_fps=20, require_pairing=False, video_bitrate=12_000_000):
         if not bindings or timeout <= 0 or not np.isfinite(timeout):
             raise ValueError('At least one binding and a positive finite timeout are required')
         if yaw_degrees is None:
@@ -87,7 +87,7 @@ class WebXRServer:
         self.video = None
         if video:
             from .video import VideoReturn
-            self.video = VideoReturn(fps=video_fps)
+            self.video = VideoReturn(fps=video_fps, bitrate=video_bitrate)
         self.context = None
         if bool(cert) != bool(key):
             raise ValueError('Supply both TLS certificate and key')

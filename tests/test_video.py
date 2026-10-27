@@ -106,6 +106,29 @@ class VideoReturnTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await peer.close()
 
+    async def test_high_resolution_stream_preserves_full_frame_dimensions(self):
+        from aiortc import RTCPeerConnection, RTCConfiguration, RTCSessionDescription
+        from websockets.asyncio.client import connect
+        peer=RTCPeerConnection(RTCConfiguration(iceServers=[]))
+        ready=asyncio.get_running_loop().create_future()
+        peer.on('track',lambda track:ready.set_result(track))
+        try:
+            peer.addTransceiver('video',direction='recvonly')
+            await peer.setLocalDescription(await peer.createOffer())
+            with WebXRServer(['a:right'],host='127.0.0.1',port=0,video=True,video_bitrate=12_000_000) as server:
+                async with connect(f'ws://127.0.0.1:{server.port}/input?operator=a') as socket:
+                    await socket.send(json.dumps(dict(type='video_offer',sdp=peer.localDescription.sdp)))
+                    answer=json.loads(await socket.recv())
+                    self.assertIn('VP8',answer['sdp'])
+                    await peer.setRemoteDescription(RTCSessionDescription(type='answer',sdp=answer['sdp']))
+                    image=np.empty((1024,2048,3),np.uint8);image[:,:1024]=[220,20,10];image[:,1024:]=[10,20,220]
+                    server.publish_video('a',image)
+                    track=await asyncio.wait_for(ready,5)
+                    frame=await asyncio.wait_for(track.recv(),10)
+                    self.assertEqual((frame.width,frame.height),(2048,1024))
+        finally:
+            await peer.close()
+
     async def test_invalid_frames_are_rejected(self):
         from multi_quest_teleop.video import VideoReturn
         output=VideoReturn()

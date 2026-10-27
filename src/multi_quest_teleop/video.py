@@ -6,8 +6,10 @@ import threading
 import time
 
 import numpy as np
-from aiortc import RTCPeerConnection, RTCConfiguration, RTCSessionDescription, VideoStreamTrack
+from aiortc import RTCPeerConnection, RTCConfiguration, RTCSessionDescription, RTCRtpSender, VideoStreamTrack
 from av import VideoFrame
+
+from .encoder import configure_sender
 
 
 class _LatestVideoTrack(VideoStreamTrack):
@@ -38,9 +40,12 @@ class VideoReturn:
     publish() accepts RGB uint8 frames from any source. Camera placement and
     head-joint actions remain application concerns. ICE is LAN-only by default.
     """
-    def __init__(self, fps=20):
+    def __init__(self, fps=20, bitrate=12_000_000):
         if not 1 <= fps <= 60:
             raise ValueError('Video fps must be between 1 and 60')
+        if not 250_000 <= bitrate <= 100_000_000:
+            raise ValueError('Video bitrate must be between 250 kbps and 100 Mbps')
+        self.bitrate = int(bitrate)
         self.fps = fps
         self.lock = threading.Lock()
         self.frames = {}
@@ -107,7 +112,13 @@ class VideoReturn:
         self.peers[operator] = peer
         try:
             await peer.setRemoteDescription(RTCSessionDescription(sdp=sdp, type='offer'))
-            peer.addTrack(_LatestVideoTrack(lambda: self._frame(operator), self.fps))
+            sender = peer.addTrack(_LatestVideoTrack(lambda: self._frame(operator), self.fps))
+            transceiver = next(item for item in peer.getTransceivers() if item.sender is sender)
+            transceiver.setCodecPreferences([
+                codec for codec in RTCRtpSender.getCapabilities('video').codecs
+                if codec.mimeType.lower() in ('video/vp8', 'video/rtx')
+            ])
+            configure_sender(sender, self.bitrate)
             await peer.setLocalDescription(await peer.createAnswer())
             return {'type': 'video_answer', 'sdp': peer.localDescription.sdp}
         except BaseException:

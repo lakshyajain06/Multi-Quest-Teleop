@@ -3,7 +3,7 @@
 <title>Quest teleoperation</title>
 <style>body{font:20px system-ui;max-width:700px;margin:3rem auto;padding:1rem;background:#14202b;color:#edf5ff}input,button{font:inherit;padding:.6rem;margin:.4rem;max-width:90%}label{display:block}#status{white-space:pre-wrap}</style>
 <h1>Quest teleoperation</h1>
-<p>Client 0.3 · stereo world view</p>
+<p>Client 0.4 · stereo world view</p>
 <p>Connect each headset with its assigned operator ID. Release grip once, then hold grip to move. Trigger controls the gripper. The simulation video appears in the headset when video is enabled on the workstation.</p>
 <label>Workstation address <input id="server" placeholder="https://192.168.1.100:8443" autocomplete="off"></label>
 <p><a id="certificate" target="_blank" rel="noopener noreferrer" style="color:#8ed7ff">Accept workstation certificate</a> once, then return here. Allow local network access if the browser asks.</p>
@@ -112,7 +112,7 @@ async function startVideo(activeSocket) {
     if (peer !== activePeer) return;
     videoElement.srcObject=new MediaStream([event.track]);
     videoProgressAt=performance.now();videoTime=-1;
-    videoElement.play().then(()=>{$('video-status').textContent='Video receiving.';}).catch(()=>{$('video-status').textContent='Video playback blocked. Reconnect from the button.';});
+    videoElement.play().then(()=>{showVideoResolution();}).catch(()=>{$('video-status').textContent='Video playback blocked. Reconnect from the button.';});
   };
   activePeer.onconnectionstatechange=()=>{
     if (peer === activePeer) {
@@ -129,6 +129,12 @@ async function startVideo(activeSocket) {
     });
   });
   if (socket === activeSocket && peer === activePeer) activeSocket.send(JSON.stringify({type:'video_offer',sdp:activePeer.localDescription.sdp}));
+}
+function showVideoResolution() {
+  if (videoElement?.readyState >= 2) {
+    const stereo=videoFormat.layout==='stereo-sbs';
+    $('video-status').textContent=`Video: ${Math.round(videoElement.videoWidth/(stereo ? 2 : 1))}×${videoElement.videoHeight}${stereo ? ' per eye' : ''}`;
+  }
 }
 function status(text) { $('status').textContent = text; }
 async function stop() {
@@ -172,7 +178,7 @@ $('start').onclick = async () => {
     socket.onmessage = event => {
       if (socket !== activeSocket) return;
       const reply = JSON.parse(event.data);
-      if (reply.video) videoFormat=reply.video;
+      if (reply.video) {videoFormat=reply.video;showVideoResolution();}
       if (reply.type === 'video_answer' && peer) peer.setRemoteDescription({type:'answer',sdp:reply.sdp}).catch(error=>{$('video-status').textContent=error.message;});
       if (reply.type === 'video_error') {stop();status(reply.message);}
       if (reply.ack === outstanding) outstanding = null;

@@ -48,6 +48,7 @@ vm.createContext(context);vm.runInContext(script,context);
  for(const matrix of matrices) for(let i=0;i<16;i++) assert.ok(Math.abs(matrix[i]-Number(i%5===0))<1e-6);
  assert.equal(socket.sent.at(-1).views.length,2);
  assert.equal(socket.sent.at(-1).views[0].eye,'left');
+ assert.match(elements['video-status'].textContent,/320×480 per eye/);
  const asymmetric=projection.slice();asymmetric[8]=.2;asymmetric[9]=-.1;
  const remap=vm.runInContext(`projectionMap(${JSON.stringify(projection)},${JSON.stringify(asymmetric)})`,context);
  assert.ok(Math.abs(remap[12]-.2)<1e-6);assert.ok(Math.abs(remap[13]+.1)<1e-6);

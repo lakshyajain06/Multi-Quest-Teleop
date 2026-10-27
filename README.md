@@ -34,7 +34,7 @@ with MultiQuestDevice(
     cert=cert, key=key,
     allowed_origins=["https://lakshyajain06.github.io"],
     yaw_degrees=[0, 180],
-    video=True, video_fps=20,
+    video=True, video_fps=20, video_bitrate=12_000_000,
 ) as teleop:
     # Pairing is disabled by default. Enable require_pairing=True if desired.
     if teleop.token:
@@ -258,7 +258,34 @@ format in control acknowledgements. The client uses source × inverse(XR eye
 projection) to sample the correct pixels, rather than approximating eye alignment
 with an aspect-ratio fit. Source projections should be cached while unchanged.
 
-Refresh the hosted page after updating; it displays **Client 0.3**. Old mono
+Refresh the hosted page after updating; it displays **Client 0.4**. Old mono
 clients do not send the eye views needed for world stereo. Stereo doubles the
 pixel count at a given per-eye resolution. Actual Quest binocular fusion and
 motion comfort still require a physical headset check.
+
+
+## Image quality (0.4)
+
+The library defaults to a 12 Mbps ceiling for each operator's combined stereo
+stream. Set `video_bitrate=...` (bits/second) on `MultiQuestDevice` or
+`WebXRServer` to change it. The sender starts at that budget and can reduce it
+in response to receiver bandwidth estimates. This is a ceiling, not a guaranteed
+measured throughput. The page displays received pixel dimensions per eye.
+
+The consuming Ultra application now defaults to 1024x1024 **per eye** instead of
+640x480, packed as 2048x1024. Its recorded robot-camera resolutions remain
+independent. Larger frame sizes require more render/encode time and bandwidth;
+benchmark frame rate alongside visual detail. CPU VP8 encoding is still used.
+
+aiortc's stock VP8 encoder caps its bitrate at 1.5 Mbps, which severely limits
+stereo detail. The library installs a separately configured encoder on each
+sender and prefers VP8 explicitly. No process-wide codec globals are changed.
+Since aiortc has no public per-sender encoder setter, this compatibility adapter
+is isolated in `encoder.py` and guarded to **aiortc==1.15.0**. Updates to aiortc
+require checking this adapter and rerunning the real encode/decode tests.
+
+The quality regression uses a repeatable detailed moving image and compares
+actual decoded pixels against the source. It measured about 22 dB PSNR with the
+stock starting budget and 43 dB with the new budget in the local test setup.
+That synthetic result demonstrates reduced compression loss; it does not
+measure headset optics, motion latency, or subjective VR quality.
