@@ -19,3 +19,16 @@ class WorldViewTests(unittest.TestCase):
         np.testing.assert_allclose(rig.update(None),held)
         head[0]=10;np.testing.assert_allclose(rig.update(head,session=1),held)
         head[0]=20;np.testing.assert_allclose(rig.update(head,session=2),held)
+
+    def test_controller_alignment_uses_the_same_reference_as_the_camera(self):
+        anchor=np.array([1,2,3,*Rotation.from_euler('z',90,degrees=True).as_quat()])
+        rig=WorldCameraRig(anchor)
+        self.assertIsNone(rig.map_tracking_pose([0,0,0,0,0,0,1]))
+        head=np.array([0,0,1.6,0,0,0,1.])
+        rig.update(head,session=1)
+        hand=head.copy();hand[0]=.2
+        mapped=rig.map_tracking_pose(hand)
+        np.testing.assert_allclose(mapped[:3],[1,2.2,3],atol=1e-6)
+        np.testing.assert_allclose(mapped[3:],anchor[3:])
+        rig.update(None)
+        self.assertIsNone(rig.map_tracking_pose(hand))

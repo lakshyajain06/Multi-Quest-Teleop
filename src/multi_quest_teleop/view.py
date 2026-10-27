@@ -35,3 +35,22 @@ class WorldCameraRig:
         self.pose[:3] = self.anchor[:3] + anchor.apply(origin.inv().apply(head_pose[:3] - self.reference[:3]))
         self.pose[3:] = (anchor * origin.inv() * Rotation.from_quat(head_pose[3:])).as_quat()
         return self.pose.copy()
+
+    def map_tracking_pose(self, pose):
+        """Map another tracked pose (e.g. a controller) into this camera's world.
+
+        Use the same Z-up tracking basis as update(). Returns None until a
+        fresh head reference is available. This keeps hands aligned with the
+        displayed world even when the spectator anchor faces a different yaw.
+        """
+        if self.reference is None:
+            return None
+        pose = np.asarray(pose, dtype=float)
+        if pose.shape != (7,) or not np.isfinite(pose).all():
+            raise ValueError('Tracked pose must be a finite XYZW pose')
+        origin = Rotation.from_quat(self.reference[3:])
+        anchor = Rotation.from_quat(self.anchor[3:])
+        result = pose.copy()
+        result[:3] = self.anchor[:3] + anchor.apply(origin.inv().apply(pose[:3] - self.reference[:3]))
+        result[3:] = (anchor * origin.inv() * Rotation.from_quat(pose[3:])).as_quat()
+        return result
