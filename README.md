@@ -7,7 +7,7 @@ the HTML and JavaScript; it does not receive controller samples or simulation vi
 ## Connect
 
 1. Start your workstation's compatible receiver with HTTPS enabled.
-2. Open https://lakshyajain06.github.io/quest-teleop/ in each Quest Browser.
+2. Open https://lakshyajain06.github.io/Multi-Quest-Teleop/ in each Quest Browser.
 3. Enter the workstation address, including `https://` and its port.
 4. Open **Accept workstation certificate**, accept the local certificate warning,
    and return to the controller page. Allow local network access if prompted.
