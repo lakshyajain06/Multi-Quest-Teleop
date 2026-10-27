@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
-const script = fs.readFileSync('src/multi_quest_teleop/webxr.html','utf8').split('<script>')[1].split('</script>')[0];
+const script = fs.readFileSync(require('node:path').join(__dirname, '../src/multi_quest_teleop/webxr.html'),'utf8').split('<script>')[1].split('</script>')[0];
 let now = 0, nextFrame, currentSession;
 const elements = Object.fromEntries(['token','operator','start','stop','status','view','server','certificate'].map(id=>[id,{value:'',removeAttribute(){}}]));
 const gl = {makeXRCompatible:async()=>{},bindFramebuffer(){},clearColor(){},clear(){}};
