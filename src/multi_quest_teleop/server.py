@@ -134,6 +134,7 @@ class WebXRServer:
             connection.close(1008, 'Operator already connected')
             return
         previous = -1
+        previous_origin = 0
         negotiation = None
         def send_video_answer(future):
             if future.cancelled():
@@ -167,6 +168,9 @@ class WebXRServer:
                 seq = message['seq']
                 if message['version'] != 1 or type(seq) is not int or seq <= previous:
                     raise ValueError('Invalid protocol version or sequence')
+                origin = message.get('origin', 0)
+                if type(origin) is not int or origin < previous_origin:
+                    raise ValueError('Invalid tracking origin epoch')
                 rows = np.asarray(message['controllers'], dtype=np.float32)
                 if rows.shape != (2, 15) or not np.isfinite(rows).all():
                     raise ValueError('Expected two finite controller rows')
@@ -206,6 +210,13 @@ class WebXRServer:
                 previous = seq
                 with self.lock:
                     now = time.monotonic()
+                    if origin != previous_origin:
+                        self.generations[operator] += 1
+                        self.head_generations[operator] = self.head_generations.get(operator, 0) + 1
+                        self.head_samples.pop(operator, None)
+                        self.eye_samples.pop(operator, None)
+                        print(f'Operator {operator}: tracking origin {origin}; recalibrating', flush=True)
+                    previous_origin = origin
                     last = self.samples.get(operator)
                     if last is not None and now - last[0] > self.timeout:
                         self.generations[operator] += 1
@@ -227,6 +238,8 @@ class WebXRServer:
                     self.samples[operator] = (now, rows.copy())
                 # Acknowledgement limits the browser to one outstanding sample.
                 reply = {'ack': seq}
+                if 'origin' in message:
+                    reply['origin'] = origin
                 if self.video:
                     video_format = self.video.format(operator)
                     if video_format:

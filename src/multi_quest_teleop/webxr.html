@@ -3,7 +3,7 @@
 <title>Quest teleoperation</title>
 <style>body{font:20px system-ui;max-width:700px;margin:3rem auto;padding:1rem;background:#14202b;color:#edf5ff}input,button{font:inherit;padding:.6rem;margin:.4rem;max-width:90%}label{display:block}#status{white-space:pre-wrap}</style>
 <h1>Quest teleoperation</h1>
-<p>Client 0.5 · stereo world view</p>
+<p>Client 0.5.1 · stereo world view</p>
 <p>Connect each headset with its assigned operator ID. Release grip once, then hold grip to move. Trigger controls the gripper. The simulation video appears in the headset when video is enabled on the workstation.</p>
 <label>Workstation address <input id="server" placeholder="https://192.168.1.100:8443" autocomplete="off"></label>
 <p><a id="certificate" target="_blank" rel="noopener noreferrer" style="color:#8ed7ff">Accept workstation certificate</a> once, then return here. Allow local network access if the browser asks.</p>
@@ -231,7 +231,18 @@ $('start').onclick = async () => {
     const layer = new XRWebGLLayer(activeSession, gl, {alpha:true});
     activeSession.updateRenderState({baseLayer:layer});
     const space = await activeSession.requestReferenceSpace('local-floor');
-    space.addEventListener('reset', () => { stop(); status('Tracking origin changed. Reconnect and release grip.'); });
+    let originEpoch = 0;
+    let sentOrigin = 0;
+    const releaseRequired = [false, false];
+    space.addEventListener('reset', () => {
+      if (session !== activeSession) return;
+      // Quest can reset local-floor while entering VR or recovering tracking.
+      // Keep media connected; notify the receiver to recalibrate its world rig.
+      originEpoch++;
+      releaseRequired.fill(true);
+      frameMetadata.clear();
+      status('Tracking recentered. Release grips once, then hold to move.');
+    });
     const url = new URL('/input', workstation);
     url.protocol = workstation.protocol === 'https:' ? 'wss:' : 'ws:';
     url.searchParams.set('operator', $('operator').value.trim());
@@ -246,6 +257,9 @@ $('start').onclick = async () => {
       if (reply.type === 'video_answer') activeCodec=reply.codec || '';
       if (reply.type === 'video_answer' && peer) peer.setRemoteDescription({type:'answer',sdp:reply.sdp}).catch(error=>{$('video-status').textContent=error.message;});
       if (reply.type === 'video_error') {stop();status(reply.message);}
+      if (reply.ack === outstanding && sentOrigin > 0 && reply.origin !== sentOrigin) {
+        stop();status('Workstation receiver needs updating to support tracking recentering.');return;
+      }
       if (reply.ack === outstanding) outstanding = null;
     };
     socket.onopen = () => { if (socket !== activeSocket) return; status('Connected. Release grip once before moving.'); if ($('video-enabled').checked) startVideo(activeSocket).catch(error=>{$('video-status').textContent=error.message;}); };
@@ -278,13 +292,19 @@ $('start').onclick = async () => {
         const p = pose.transform.position, q = pose.transform.orientation, pad = source.gamepad;
         const b = i => pad.buttons[i]?.value || 0;
         const clicked = i => Number(pad.buttons[i]?.pressed || false);
-        rows[source.handedness === 'right' ? 1 : 0] = [p.x,p.y,p.z,q.x,q.y,q.z,q.w,b(0),b(1),1,clicked(4),clicked(5),clicked(3),pad.axes[2]||0,pad.axes[3]||0];
+        const hand = source.handedness === 'right' ? 1 : 0;
+        if (releaseRequired[hand]) {
+          if (b(1) > 0.5) continue;
+          releaseRequired[hand] = false;
+        }
+        rows[hand] = [p.x,p.y,p.z,q.x,q.y,q.z,q.w,b(0),b(1),1,clicked(4),clicked(5),clicked(3),pad.axes[2]||0,pad.axes[3]||0];
       }
       // Keep HMD poses flowing to the world camera while its first frame loads.
       if ($('video-enabled').checked && (!videoElement || videoElement.readyState < 2)) {
         for (const row of rows) row[9]=0;
       }
       outstanding = sequence++; sentAt = performance.now();
+      sentOrigin = originEpoch;
       let head=Array(8).fill(0);
       if (viewer && !viewer.emulatedPosition) {
         const p=viewer.transform.position,q=viewer.transform.orientation;
@@ -296,7 +316,7 @@ $('start').onclick = async () => {
         const p=view.transform.position,q=view.transform.orientation;
         views.push({eye:view.eye,pose:[p.x,p.y,p.z,q.x,q.y,q.z,q.w],projection:Array.from(view.projectionMatrix)});
       }
-      socket.send(JSON.stringify({version:1,seq:outstanding,controllers:rows,head,views:views.length===2 ? views : []}));
+      socket.send(JSON.stringify({version:1,seq:outstanding,origin:originEpoch,controllers:rows,head,views:views.length===2 ? views : []}));
     }
     activeSession.requestAnimationFrame(frame);
   } catch (error) { await stop(); status(error.message); }

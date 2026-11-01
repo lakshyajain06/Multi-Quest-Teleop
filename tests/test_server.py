@@ -143,6 +143,41 @@ class WebXRTrials(unittest.TestCase):
         self.assertEqual(self.server.snapshot()[0,9],0)
         self.assertEqual(self.server.snapshot()[0,9],1)
 
+    def test_origin_reset_recalibrates_only_its_operator_without_disconnect(self):
+        a,b=self.client(),self.client('b')
+        rows=self.rows()
+        def send_origin(origin,seq):
+            a.send(json.dumps(dict(version=1,seq=seq,origin=origin,controllers=rows.tolist(),
+                                   head=[0,1.6,0,0,0,0,1,1])))
+            self.assertEqual(json.loads(a.recv()),{'ack':seq,'origin':origin})
+        send_origin(0,0);self.send(b,rows)
+        self.server.snapshot()
+        self.assertTrue(self.server.snapshot()[:,9].all())
+        previous=self.server.head_pose('a')[1]
+        send_origin(1,1)
+        packet=self.server.snapshot()
+        self.assertEqual(packet[0,9],0)
+        self.assertEqual(packet[1,9],1)
+        self.assertGreater(self.server.head_pose('a')[1],previous)
+        self.assertIsNotNone(self.server.head_pose('a')[0])
+        self.assertEqual(len(self.server.clients),2)
+        self.assertEqual(self.server.snapshot()[0,9],1)
+        previous=self.server.head_pose('a')[1]
+        send_origin(1,2)
+        self.assertEqual(self.server.head_pose('a')[1],previous)
+        self.assertEqual(self.server.snapshot()[0,9],1)
+        send_origin(2,3)
+        self.assertEqual(self.server.snapshot()[0,9],0)
+
+    def test_invalid_origin_epoch_is_rejected(self):
+        for origin in (-1,True,1.5,'1'):
+            with self.subTest(origin=origin):
+                client=self.client('b')
+                client.send(json.dumps(dict(version=1,seq=0,origin=origin,controllers=self.rows().tolist())))
+                with self.assertRaises(ConnectionClosed):client.recv()
+                deadline=time.monotonic()+1
+                while 'b' in self.server.clients and time.monotonic()<deadline:time.sleep(.005)
+
     def test_generated_certificate_and_hosted_page_origin(self):
         with tempfile.TemporaryDirectory() as folder:
             cert,key=create_local_certificate('localhost',folder)

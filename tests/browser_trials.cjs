@@ -40,11 +40,34 @@ const frame={getPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:
   socket.onmessage({data:'{"ack":0}'});
   nextFrame(0,{getPose:()=>null});assert.equal(socket.sent[1].controllers[1][9],0);
   now=600;nextFrame(0,frame);assert.equal(socket.readyState,3);assert.match(elements.status.textContent,/stalled/);
+  const staleReset=currentSession.listeners['space:reset'];
   await elements.start.onclick();const fresh=Socket.all.at(-1);
   socket.onclose({reason:'old connection'});assert.equal(fresh.readyState,1);
-  currentSession.listeners['space:reset']();assert.equal(fresh.readyState,3);
+  staleReset();assert.equal(fresh.readyState,1); // old reference spaces cannot reset a new session
+  fresh.onopen();
+  const right={handedness:'right',gripSpace:{},gamepad:{mapping:'xr-standard',buttons:[{value:0},{value:.8}],axes:[]}};
+  currentSession.inputSources=[right];
+  currentSession.listeners['space:reset']();assert.equal(fresh.readyState,1);
+  assert.match(elements.status.textContent,/recentered/);
+  nextFrame(0,frame);
+  assert.equal(fresh.sent[0].origin,1);
+  assert.equal(fresh.sent[0].controllers[1][9],0); // held grip cannot move after origin reset
+  fresh.onmessage({data:'{"ack":0,"origin":1}'});
+  right.gamepad.buttons[1].value=0;nextFrame(0,frame);
+  assert.equal(fresh.sent[1].controllers[1][9],1);
+  assert.equal(fresh.sent[1].controllers[1][8],0);
+  fresh.onmessage({data:'{"ack":1,"origin":1}'});
+  right.gamepad.buttons[1].value=.8;nextFrame(0,frame);
+  assert.equal(fresh.sent[2].controllers[1][8],.8);
+  fresh.onmessage({data:'{"ack":2,"origin":1}'});
+  currentSession.listeners['space:reset']();nextFrame(0,frame);
+  assert.equal(fresh.sent[3].origin,2);
+  assert.equal(fresh.sent[3].controllers[1][9],0);
+  assert.equal(fresh.readyState,1);
+  fresh.onmessage({data:'{"ack":3}'});
+  assert.equal(fresh.readyState,3);assert.match(elements.status.textContent,/receiver needs updating/);
   await elements.start.onclick();socket=Socket.all.at(-1);
   currentSession.visibilityState='hidden';currentSession.listeners.visibilitychange();assert.equal(socket.readyState,3);
   context.isSecureContext=false;await elements.start.onclick();assert.match(elements.status.textContent,/HTTPS/);
-  console.log('PASS: page initialization, secure URL, controller mapping, ACK backpressure, missing tracking, stalled link, reconnect race, origin reset, backgrounding, insecure context');
+  console.log('PASS: page initialization, secure URL, controller mapping, ACK backpressure, missing tracking, stalled link, reconnect race, startup/repeated origin reset with grip rearm, backgrounding, insecure context');
 })().catch(error=>{console.error(error);process.exitCode=1;});
