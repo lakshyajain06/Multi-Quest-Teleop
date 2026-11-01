@@ -3,7 +3,7 @@
 <title>Quest teleoperation</title>
 <style>body{font:20px system-ui;max-width:700px;margin:3rem auto;padding:1rem;background:#14202b;color:#edf5ff}input,button{font:inherit;padding:.6rem;margin:.4rem;max-width:90%}label{display:block}#status{white-space:pre-wrap}</style>
 <h1>Quest teleoperation</h1>
-<p>Client 0.5.2 · stereo world view</p>
+<p>Client 0.5.3 · stereo world view</p>
 <p>Connect each headset with its assigned operator ID. Release grip once, then hold grip to move. Trigger controls the gripper. The simulation video appears in the headset when video is enabled on the workstation.</p>
 <label>Workstation address <input id="server" placeholder="https://192.168.1.100:8443" autocomplete="off"></label>
 <p><a id="certificate" target="_blank" rel="noopener noreferrer" style="color:#8ed7ff">Accept workstation certificate</a> once, then return here. Allow local network access if the browser asks.</p>
@@ -145,6 +145,12 @@ function createVideoRenderer(gl) {
 }
 async function startVideo(activeSocket) {
   const activePeer = new RTCPeerConnection({iceServers:[]}); peer=activePeer;
+  const lowDelay = receiver => {
+    // Teleoperation prefers a fresh frame over smoothing playback with a queue.
+    if (receiver && 'jitterBufferTarget' in receiver) {
+      try { receiver.jitterBufferTarget=0; } catch {}
+    }
+  };
   if(typeof activePeer.createDataChannel==='function') {
     const metadata=activePeer.createDataChannel('frame-meta',{ordered:false,maxRetransmits:0});
     metadata.onmessage=event=>{
@@ -161,6 +167,7 @@ async function startVideo(activeSocket) {
   videoElement=document.createElement('video'); videoElement.muted=true; videoElement.autoplay=true; videoElement.playsInline=true;videoRenderer?.attach(videoElement);
   activePeer.ontrack=event=>{
     if (peer !== activePeer) return;
+    lowDelay(event.receiver);
     videoElement.srcObject=new MediaStream([event.track]);
     videoProgressAt=performance.now();videoTime=-1;
     videoElement.play().then(()=>{showVideoResolution();}).catch(()=>{$('video-status').textContent='Video playback blocked. Reconnect from the button.';});
@@ -171,7 +178,7 @@ async function startVideo(activeSocket) {
       if (['failed','disconnected'].includes(activePeer.connectionState)) {stop();status('Video connection lost. Reconnect to resume.');}
     }
   };
-  activePeer.addTransceiver('video',{direction:'recvonly'});
+  lowDelay(activePeer.addTransceiver('video',{direction:'recvonly'})?.receiver);
   await activePeer.setLocalDescription(await activePeer.createOffer());
   if (activePeer.iceGatheringState !== 'complete') await new Promise((resolve,reject)=>{
     const timer=setTimeout(()=>reject(Error('Video network discovery timed out')),10000);
@@ -193,8 +200,12 @@ function showVideoResolution() {
         for(const stat of report.values()) if(stat.type==='inbound-rtp' && stat.kind==='video') {
           let fps=stat.framesPerSecond;
           if(fps===undefined && previousStats) fps=(stat.framesDecoded-previousStats.frames)/(now-previousStats.time)*1000;
-          previousStats={frames:stat.framesDecoded,time:now};
           if(Number.isFinite(fps)) statsText=` · ${fps.toFixed(1)} fps`;
+          if(previousStats && stat.jitterBufferEmittedCount>previousStats.emitted) {
+            const delay=(stat.jitterBufferDelay-previousStats.delay)/(stat.jitterBufferEmittedCount-previousStats.emitted)*1000;
+            if(Number.isFinite(delay)) statsText+=` · buffer ${Math.round(delay)} ms`;
+          }
+          previousStats={frames:stat.framesDecoded,time:now,delay:stat.jitterBufferDelay,emitted:stat.jitterBufferEmittedCount};
         }
       }).catch(()=>{}).finally(()=>{statsPending=false;});
     }

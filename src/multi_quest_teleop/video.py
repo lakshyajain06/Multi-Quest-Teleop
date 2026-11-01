@@ -18,10 +18,19 @@ class _LatestVideoTrack(VideoStreamTrack):
         self.frame_getter, self.fps = frame_getter, fps
         self.started = None
         self.deadline = None
+        self.last_publication = None
+        self.last_frame_at = 0.
 
     async def recv(self):
-        while (image := self.frame_getter()) is None:
-            await asyncio.sleep(.01)
+        while True:
+            image = self.frame_getter()
+            if image is not None:
+                publication = image[1]['published_at']
+                # Do not encode the same slow simulation frame at 30Hz. A
+                # small heartbeat lets RTP jitter buffers finish the last frame.
+                if publication != self.last_publication or time.monotonic() - self.last_frame_at >= .2:
+                    break
+            await asyncio.sleep(.005)
         now = time.monotonic()
         if self.started is None:
             self.started = now
@@ -36,6 +45,8 @@ class _LatestVideoTrack(VideoStreamTrack):
         else:
             image, metadata = image
         frame = VideoFrame.from_ndarray(image, format='rgb24')
+        self.last_publication = metadata['published_at']
+        self.last_frame_at = time.monotonic()
         frame.opaque = metadata
         frame.pts = int((time.monotonic() - self.started) * 90000)
         frame.time_base = Fraction(1, 90000)
@@ -98,9 +109,12 @@ class VideoReturn:
                 eye: (basis * Rotation.from_quat(value)).as_quat().tolist()
                 for eye,value in orientations.items()
             }
+        # Copy large RGB arrays before taking the lock also used by input ACKs.
+        # Only the immutable slot swap belongs in the critical section.
+        copied = np.ascontiguousarray(image).copy()
         with self.lock:
             self.formats[operator] = metadata
-            self.frames[operator] = np.ascontiguousarray(image).copy()
+            self.frames[operator] = copied
             self.published_at[operator] = time.monotonic()
 
     def format(self, operator):
@@ -140,7 +154,10 @@ class VideoReturn:
                 self.channels[operator] = channel
         def encoded(timestamp, metadata, elapsed_ms, bitrate):
             with self.lock:
-                self.encoder_stats[operator] = {'codec':self.codec, 'encode_ms':elapsed_ms, 'bitrate':bitrate}
+                self.encoder_stats[operator] = {
+                    'codec':self.codec, 'encode_ms':elapsed_ms, 'bitrate':bitrate,
+                    'publish_to_encode_ms': (time.monotonic()-metadata['published_at'])*1000,
+                }
             if timestamp is not None and metadata and metadata.get('video',{}).get('orientations'):
                 def deliver():
                     import json

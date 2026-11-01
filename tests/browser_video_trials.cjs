@@ -19,7 +19,7 @@ class Peer {
  static all=[];
  constructor(){this.iceGatheringState='complete';Peer.all.push(this);}
  createDataChannel(){this.channel={};return this.channel;}
- addTransceiver(kind,options){assert.equal(kind,'video');assert.equal(options.direction,'recvonly');}
+ addTransceiver(kind,options){assert.equal(kind,'video');assert.equal(options.direction,'recvonly');this.receiver={jitterBufferTarget:null};return {receiver:this.receiver};}
  async createOffer(){return {type:'offer',sdp:'offer-sdp'};}
  async setLocalDescription(value){this.localDescription=value;}
  async setRemoteDescription(value){this.remoteDescription=value;}
@@ -33,6 +33,7 @@ vm.createContext(context);vm.runInContext(script,context);
 (async()=>{
  await elements.start.onclick();const socket=Socket.all[0];socket.onopen();await new Promise(setImmediate);
  assert.equal(socket.sent[0].type,'video_offer');
+ assert.equal(Peer.all[0].receiver.jitterBufferTarget,0);
  socket.onmessage({data:JSON.stringify({type:'video_answer',sdp:'answer-sdp'})});
  assert.equal(Peer.all[0].remoteDescription.sdp,'answer-sdp');
  Peer.all[0].ontrack({track:{}});await new Promise(setImmediate);

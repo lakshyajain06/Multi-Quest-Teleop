@@ -56,8 +56,7 @@ class NvencH264Encoder:
         import av
         from fractions import Fraction
         from aiortc.mediastreams import VIDEO_TIME_BASE, convert_timebase
-        if self.codec and (self.codec.width != frame.width or self.codec.height != frame.height or
-                           abs(self._bitrate-self.configured_bitrate)/self.configured_bitrate > .2):
+        if self.codec and (self.codec.width != frame.width or self.codec.height != frame.height):
             self.codec = None
         if self.codec is None:
             codec = av.CodecContext.create('h264_nvenc','w')
@@ -68,10 +67,16 @@ class NvencH264Encoder:
             codec.time_base, codec.framerate = Fraction(1,90000), Fraction(self.fps,1)
             codec.max_b_frames = 0
             codec.gop_size = self.fps * 2
-            codec.options = {'preset':'p3','tune':'ull','rc':'vbr','cq':'18','zerolatency':'1',
+            codec.options = {'preset':'p3','tune':'ull','rc':'vbr','zerolatency':'1',
                              'rc-lookahead':'0','delay':'0','profile':'baseline',
                              'maxrate':str(self._bitrate),'bufsize':str(max(1,self._bitrate//self.fps)), 'forced-idr':'1'}
             self.codec = codec
+        elif self._bitrate != self.configured_bitrate:
+            # FFmpeg NVENC supports in-place rate reconfiguration. Recreating
+            # the CUDA/encoder context here causes 500ms+ stalls and keyframe
+            # bursts whenever receiver bandwidth estimates fluctuate.
+            self.codec.bit_rate = self._bitrate
+            self.configured_bitrate = self._bitrate
         frame.pict_type = av.video.frame.PictureType.I if force_keyframe else av.video.frame.PictureType.NONE
         data = b''.join(bytes(packet) for packet in self.codec.encode(frame))
         timestamp = convert_timebase(frame.pts,frame.time_base,VIDEO_TIME_BASE)

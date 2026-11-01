@@ -6,6 +6,23 @@ import numpy as np
 
 @unittest.skipUnless(importlib.util.find_spec('aiortc'), 'Install the video extra')
 class EncoderQualityTests(unittest.TestCase):
+    def test_nvenc_bandwidth_changes_keep_the_encoder_context(self):
+        from multi_quest_teleop.encoder import NvencH264Encoder,choose_codec
+        if choose_codec()!='nvenc':self.skipTest('NVENC unavailable')
+        from av import VideoFrame
+        encoder=NvencH264Encoder(24_000_000,30)
+        context=None
+        for index,bitrate in enumerate((24_000_000,4_000_000,12_000_000,3_000_000)):
+            image=np.full((128,256,3),index*40,np.uint8)
+            frame=VideoFrame.from_ndarray(image,format='rgb24')
+            frame.pts=index*3000;frame.time_base=Fraction(1,90000)
+            encoder.target_bitrate=bitrate
+            packets,_=encoder.encode(frame,index==0)
+            self.assertTrue(packets)
+            if context is None:context=encoder.codec
+            self.assertIs(encoder.codec,context)
+            self.assertEqual(encoder.codec.bit_rate,bitrate)
+
     def test_bitrate_budget_is_per_sender_and_adapts_down(self):
         from multi_quest_teleop.encoder import StreamVp8Encoder
         first,second=StreamVp8Encoder(12_000_000),StreamVp8Encoder(3_000_000)

@@ -4,6 +4,9 @@ from contextlib import AsyncExitStack
 import importlib.util
 import json
 import unittest
+import threading
+import time
+from unittest.mock import patch
 
 import numpy as np
 from multi_quest_teleop import WebXRServer
@@ -11,6 +14,48 @@ from multi_quest_teleop import WebXRServer
 
 @unittest.skipUnless(importlib.util.find_spec('aiortc'), 'Install the video extra')
 class VideoReturnTests(unittest.IsolatedAsyncioTestCase):
+    async def test_latest_slot_waits_for_new_frames_with_a_bounded_heartbeat(self):
+        from multi_quest_teleop.video import VideoReturn, _LatestVideoTrack
+        output=VideoReturn(codec='vp8')
+        image=np.full((16,32,3),40,np.uint8)
+        output.publish('a',image)
+        track=_LatestVideoTrack(lambda:output._frame('a'),30)
+        try:
+            first=await track.recv()
+            waiting=asyncio.create_task(track.recv())
+            await asyncio.sleep(.05)
+            self.assertFalse(waiting.done())
+            output.publish('a',image+50)
+            second=await asyncio.wait_for(waiting,.5)
+            self.assertGreater(second.pts,first.pts)
+            np.testing.assert_array_equal(second.to_ndarray(format='rgb24'),image+50)
+            started=time.monotonic()
+            heartbeat=await asyncio.wait_for(track.recv(),.5)
+            self.assertGreaterEqual(time.monotonic()-started,.14)
+            self.assertEqual(heartbeat.opaque['published_at'],second.opaque['published_at'])
+        finally:
+            track.stop()
+
+    async def test_slow_rgb_copy_does_not_block_input_acknowledgements(self):
+        from websockets.asyncio.client import connect
+        started,release=threading.Event(),threading.Event()
+        image=np.zeros((16,32,3),np.uint8)
+        class SlowCopy:
+            def copy(self):
+                started.set();release.wait(3)
+                return image.copy()
+        with WebXRServer(['a:right'],host='127.0.0.1',port=0,video=True,video_codec='vp8') as server:
+            with patch('multi_quest_teleop.video.np.ascontiguousarray',return_value=SlowCopy()):
+                publisher=threading.Thread(target=lambda:server.publish_video('a',image))
+                publisher.start()
+                try:
+                    self.assertTrue(await asyncio.to_thread(started.wait,1))
+                    async with connect(f'ws://127.0.0.1:{server.port}/input?operator=a') as socket:
+                        await socket.send(json.dumps(dict(version=1,seq=0,controllers=np.zeros((2,15)).tolist())))
+                        self.assertEqual(json.loads(await asyncio.wait_for(socket.recv(),.25)),{'ack':0})
+                finally:
+                    release.set();publisher.join(timeout=2)
+
     async def test_two_operators_receive_their_own_frames_and_send_heads(self):
         from aiortc import RTCPeerConnection, RTCConfiguration, RTCSessionDescription
         from websockets.asyncio.client import connect
