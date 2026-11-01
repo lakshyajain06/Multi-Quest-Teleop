@@ -3,7 +3,7 @@
 <title>Quest teleoperation</title>
 <style>body{font:20px system-ui;max-width:700px;margin:3rem auto;padding:1rem;background:#14202b;color:#edf5ff}input,button{font:inherit;padding:.6rem;margin:.4rem;max-width:90%}label{display:block}#status{white-space:pre-wrap}</style>
 <h1>Quest teleoperation</h1>
-<p>Client 0.5.1 · stereo world view</p>
+<p>Client 0.5.2 · stereo world view</p>
 <p>Connect each headset with its assigned operator ID. Release grip once, then hold grip to move. Trigger controls the gripper. The simulation video appears in the headset when video is enabled on the workstation.</p>
 <label>Workstation address <input id="server" placeholder="https://192.168.1.100:8443" autocomplete="off"></label>
 <p><a id="certificate" target="_blank" rel="noopener noreferrer" style="color:#8ed7ff">Accept workstation certificate</a> once, then return here. Allow local network access if the browser asks.</p>
@@ -233,6 +233,7 @@ $('start').onclick = async () => {
     const space = await activeSession.requestReferenceSpace('local-floor');
     let originEpoch = 0;
     let sentOrigin = 0;
+    let inputDelayed = false;
     const releaseRequired = [false, false];
     space.addEventListener('reset', () => {
       if (session !== activeSession) return;
@@ -260,7 +261,13 @@ $('start').onclick = async () => {
       if (reply.ack === outstanding && sentOrigin > 0 && reply.origin !== sentOrigin) {
         stop();status('Workstation receiver needs updating to support tracking recentering.');return;
       }
-      if (reply.ack === outstanding) outstanding = null;
+      if (reply.ack === outstanding) {
+        outstanding = null;
+        if (inputDelayed) {
+          inputDelayed = false;
+          status('Input recovered. Release grips once, then hold to move.');
+        }
+      }
     };
     socket.onopen = () => { if (socket !== activeSocket) return; status('Connected. Release grip once before moving.'); if ($('video-enabled').checked) startVideo(activeSocket).catch(error=>{$('video-status').textContent=error.message;}); };
     socket.onerror = () => { if (socket !== activeSocket) return; status('Connection failed. Check workstation address, operator ID, certificate, and pairing code if enabled.'); stop(); };
@@ -281,7 +288,13 @@ $('start').onclick = async () => {
       }
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       if (outstanding !== null) {
-        if (performance.now() - sentAt > 500) { stop(); status('Input link stalled. Reconnect to resume.'); }
+        const delay = performance.now() - sentAt;
+        if (delay > 3000) { stop(); status('Input link stalled for 3 seconds. Reconnect to resume.'); }
+        else if (delay > 500 && !inputDelayed) {
+          inputDelayed = true;
+          releaseRequired.fill(true);
+          status('Input delayed. Motion paused; waiting for the link to recover.');
+        }
         return;
       }
       const rows = [Array(15).fill(0), Array(15).fill(0)];

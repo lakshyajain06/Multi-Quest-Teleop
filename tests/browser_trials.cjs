@@ -39,7 +39,10 @@ const frame={getPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:
   socket.onmessage({data:'{"ack":99}'});nextFrame(0,frame);assert.equal(socket.sent.length,1);
   socket.onmessage({data:'{"ack":0}'});
   nextFrame(0,{getPose:()=>null});assert.equal(socket.sent[1].controllers[1][9],0);
-  now=600;nextFrame(0,frame);assert.equal(socket.readyState,3);assert.match(elements.status.textContent,/stalled/);
+  now=600;nextFrame(0,frame);assert.equal(socket.readyState,1);assert.match(elements.status.textContent,/delayed/);
+  socket.onmessage({data:'{"ack":1}'});assert.match(elements.status.textContent,/recovered/);
+  nextFrame(0,frame);assert.equal(socket.sent.at(-1).controllers[1][9],0); // held grip stays blocked after a delay
+  now=3700;nextFrame(0,frame);assert.equal(socket.readyState,3);assert.match(elements.status.textContent,/stalled/);
   const staleReset=currentSession.listeners['space:reset'];
   await elements.start.onclick();const fresh=Socket.all.at(-1);
   socket.onclose({reason:'old connection'});assert.equal(fresh.readyState,1);
