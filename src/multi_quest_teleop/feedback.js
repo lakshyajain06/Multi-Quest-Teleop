@@ -16,7 +16,9 @@ function createContactFeedback() {
     packets++;
     forces = {left:clamp(value.arm_force_n?.left,1e6),right:clamp(value.arm_force_n?.right,1e6)};
     sample = {left: clamp(value.haptics?.left, .65), right: clamp(value.haptics?.right, .65),
-              collision: value.self_collision === true};
+              collision: value.self_collision === true,
+              blocked: value.command_blocked === true || value.collision_blocked === true,
+              reasons: Object.entries(value.blocked_commands || {}).slice(0,8).map(([name,reason])=>`${name}: ${reason}`).join(', ')};
   }
 
   function pulse(actuator, intensity, duration) {
@@ -37,7 +39,7 @@ function createContactFeedback() {
 
   function describe(now=performance.now()) {
     const signal=packets ? `Contact signals: ${now-receivedAt<250 ? 'live' : 'stale'} (${packets}) · L ${forces.left.toFixed(1)} N / R ${forces.right.toFixed(1)} N · self-contact ${sample?.collision ? 'yes' : 'no'}` : 'Contact signals: waiting';
-    return `${signal}\nHaptics: L ${hands.left || 'not detected'} / R ${hands.right || 'not detected'} · requests ${requested}, completed ${completed}${lastError ? ' · '+lastError : ''}${now<testUntil ? '\nFeedback self-test running' : ''}`;
+    return `${signal}${sample?.blocked ? '\nCommands blocked: '+(sample.reasons || 'rejected target') : ''}\nHaptics: L ${hands.left || 'not detected'} / R ${hands.right || 'not detected'} · requests ${requested}, completed ${completed}${lastError ? ' · '+lastError : ''}${now<testUntil ? '\nFeedback self-test running' : ''}`;
   }
 
   function reset(session) {
@@ -51,7 +53,7 @@ function createContactFeedback() {
   function update(session, now) {
     const fresh = now - receivedAt < 250 && session.visibilityState === 'visible';
     const testing = now < testUntil && session.visibilityState === 'visible';
-    const target = testing ? .35 : (fresh && sample?.collision ? .22 : 0);
+    const target = testing ? .35 : (fresh && (sample?.collision || sample?.blocked) ? .22 : 0);
     const dt = previousFrame === null ? 16 : Math.max(0, Math.min(100, now - previousFrame));
     opacity += (target - opacity) * (1 - Math.exp(-dt / 70));
     previousFrame = now;

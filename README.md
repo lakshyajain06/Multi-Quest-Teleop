@@ -110,7 +110,7 @@ Optional launch parameters belong in the URL fragment, e.g.
 `#server=https%3A%2F%2F192.168.1.100%3A8443&operator=a&token=YOUR_SESSION_TOKEN`.
 Fragments are not sent to GitHub. Do not publish token-bearing URLs or keys.
 
-## Optional contact feedback (0.5.6)
+## Optional contact feedback (0.5.7)
 
 The standard GitHub Pages and locally served clients support per-hand haptics
 and a soft red self-collision tint. Applications supply contact feedback;
@@ -145,6 +145,15 @@ the last session's status remains visible after exiting XR. Both the WebXR
 `hapticActuators[].pulse` API and `vibrationActuator.playEffect` are supported.
 The tint covers the visible video rather than relying on the texture edges
 being visible through the headset lens mask.
+
+Applications may also send `command_blocked: true`, `collision_blocked: true`
+and a `blocked_commands` object such as `{"left_pose":"self_collision"}`.
+Either blocked flag keeps the red tint on for every fresh sample, even when
+no physical contact force is present. Send `command_blocked: false` and clear
+the collision flag when the active commands are accepted or released. The
+client does not clear a blocked state on a timer while fresh blocked samples
+continue to arrive. `blocked_commands` preserves the actual reason, including
+IK or joint-limit failures, rather than labelling all rejections as collision.
 
 ## Tests
 

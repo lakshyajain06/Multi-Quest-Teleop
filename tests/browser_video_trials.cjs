@@ -69,7 +69,7 @@ vm.createContext(context);vm.runInContext(fs.readFileSync(require('node:path').j
  const pulses=[];session.visibilityState='visible';
  session.inputSources=[{handedness:'left',gamepad:{hapticActuators:[{pulse:(a,d)=>{pulses.push([a,d]);return Promise.resolve(true);}}]}}];
  const format=vm.runInContext('videoFormat',context);
- socket.onmessage({data:JSON.stringify({video:{...format,feedback:{version:1,seq:1,haptics:{left:.4,right:0},self_collision:true}}})});
+ socket.onmessage({data:JSON.stringify({video:{...format,feedback:{version:1,seq:1,haptics:{left:.4,right:0},self_collision:false,command_blocked:true,blocked_commands:{left_pose:'self_collision'}}}})});
  const before=draws;
  nextFrame(1,{getViewerPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:0,z:0,w:1}},views:[eyeView('left',.968),eyeView('right',1.032)]})});
  assert.deepEqual(pulses,[[.4,80]]);assert.equal(draws-before,2); // tint is part of the stereo video draw

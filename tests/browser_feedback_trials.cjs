@@ -39,6 +39,20 @@ feedback.update(session,500);assert.equal(rumble.length,1); // one pulse, not re
 assert.match(feedback.describe(500),/rumble supported/);
 assert.match(feedback.describe(500),/self-test running/);
 feedback.update(session,1601);assert.equal(rumble.at(-1)[1].strongMagnitude,0);
+// Sustained rejected commands stay red without any physical contact force.
+const blocked=createContactFeedback();
+for(let t=0;t<=6000;t+=40){
+ blocked.receive({version:1,seq:t/40,command_blocked:true,self_collision:false,
+   blocked_commands:{left_pose:'self_collision'},haptics:{left:0,right:0}},t);
+ const alpha=blocked.update(session,t);
+ if(t>=400)assert(alpha>.21&&alpha<=.22);
+}
+assert.match(blocked.describe(6000),/left_pose: self_collision/);
+for(let t=6040;t<=6800;t+=40){
+ blocked.receive({version:1,seq:t/40,command_blocked:false,self_collision:false,haptics:{}},t);
+ blocked.update(session,t);
+}
+assert(blocked.update(session,6801)<.001);
 setImmediate(()=>{
  assert.match(feedback.describe(1601),/completed 1/);
  console.log('PASS: per-hand pulses, cap, cadence, expiry, hidden XR, reset, optional actuators, rumble fallback and one-shot self-test');
