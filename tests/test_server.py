@@ -66,6 +66,13 @@ class WebXRTrials(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises(InvalidStatus):
                 self.client(**kwargs)
 
+    def test_local_client_serves_the_same_optional_feedback_script_as_pages(self):
+        with urllib.request.urlopen(f'http://127.0.0.1:{self.port}/') as response:
+            self.assertIn(b'feedback.js?v=0.5.4', response.read())
+        with urllib.request.urlopen(f'http://127.0.0.1:{self.port}/feedback.js?v=0.5.4') as response:
+            self.assertIn('text/javascript', response.headers['Content-Type'])
+            self.assertIn(b'createContactFeedback', response.read())
+
     def test_duplicate_operator_does_not_evict_owner(self):
         owner = self.client()
         duplicate = self.client()

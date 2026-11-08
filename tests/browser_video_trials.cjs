@@ -29,7 +29,7 @@ const context={document:{getElementById:id=>elements[id],createElement:()=>video
  URL,URLSearchParams,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},isSecureContext:true,performance:{now:()=>0},setTimeout,clearTimeout,Float32Array,
  navigator:{xr:{requestSession:async kind=>{assert.equal(kind,'immersive-vr');return session={inputSources:[],addEventListener(){},updateRenderState(){},requestReferenceSpace:async()=>({addEventListener(){}}),requestAnimationFrame:cb=>nextFrame=cb,end:async()=>{}};}}},
  XRWebGLLayer:class{getViewport(){return {x:0,y:0,width:640,height:480};}},window:{addEventListener(){}}};
-vm.createContext(context);vm.runInContext(script,context);
+vm.createContext(context);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../src/multi_quest_teleop/feedback.js'),'utf8'),context);vm.runInContext(script,context);
 (async()=>{
  await elements.start.onclick();const socket=Socket.all[0];socket.onopen();await new Promise(setImmediate);
  assert.equal(socket.sent[0].type,'video_offer');
@@ -64,6 +64,15 @@ vm.createContext(context);vm.runInContext(script,context);
  const asymmetric=projection.slice();asymmetric[8]=.2;asymmetric[9]=-.1;
  const remap=vm.runInContext(`projectionMap(${JSON.stringify(projection)},${JSON.stringify(asymmetric)})`,context);
  assert.ok(Math.abs(remap[12]-.2)<1e-6);assert.ok(Math.abs(remap[13]+.1)<1e-6);
+ // The ordinary page accepts contact metadata through the same video ACK.
+ const pulses=[];session.visibilityState='visible';
+ session.inputSources=[{handedness:'left',gamepad:{hapticActuators:[{pulse:(a,d)=>{pulses.push([a,d]);return Promise.resolve(true);}}]}}];
+ const format=vm.runInContext('videoFormat',context);
+ socket.onmessage({data:JSON.stringify({video:{...format,feedback:{version:1,seq:1,haptics:{left:.4,right:0},self_collision:true}}})});
+ const before=draws;
+ nextFrame(1,{getViewerPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:0,z:0,w:1}},views:[eyeView('left',.968),eyeView('right',1.032)]})});
+ assert.deepEqual(pulses,[[.4,80]]);assert.equal(draws-before,4); // stereo image + both borders
  await elements.stop.onclick();assert.equal(Peer.all[0].closed,true);assert.equal(video.srcObject,null);
+ assert.deepEqual(pulses.at(-1),[0,1]);
  console.log('PASS: WebRTC offer/answer, video playback, per-eye texture rendering, headset pose uplink, media cleanup');
 })().catch(error=>{console.error(error);process.exitCode=1;});

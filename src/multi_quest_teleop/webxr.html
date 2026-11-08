@@ -3,7 +3,7 @@
 <title>Quest teleoperation</title>
 <style>body{font:20px system-ui;max-width:700px;margin:3rem auto;padding:1rem;background:#14202b;color:#edf5ff}input,button{font:inherit;padding:.6rem;margin:.4rem;max-width:90%}label{display:block}#status{white-space:pre-wrap}</style>
 <h1>Quest teleoperation</h1>
-<p>Client 0.5.3 · stereo world view</p>
+<p>Client 0.5.4 · stereo world view</p>
 <p>Connect each headset with its assigned operator ID. Release grip once, then hold grip to move. Trigger controls the gripper. The simulation video appears in the headset when video is enabled on the workstation.</p>
 <label>Workstation address <input id="server" placeholder="https://192.168.1.100:8443" autocomplete="off"></label>
 <p><a id="certificate" target="_blank" rel="noopener noreferrer" style="color:#8ed7ff">Accept workstation certificate</a> once, then return here. Allow local network access if the browser asks.</p>
@@ -16,7 +16,9 @@
 <button id="start">Connect and enter XR</button><button id="stop" disabled>Disconnect</button>
 <p id="status">Ready. Use Quest controllers. Controller input and per-operator video.</p>
 <canvas id="view"></canvas>
+<script src="feedback.js?v=0.5.4"></script>
 <script>
+const contactFeedback = createContactFeedback();
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.hash.slice(1) || location.search);
 $('server').value = params.get('server') || (location.hostname?.endsWith('github.io') ? '' : location.origin || '');
@@ -213,6 +215,7 @@ function showVideoResolution() {
 }
 function status(text) { $('status').textContent = text; }
 async function stop() {
+  contactFeedback.reset(session);
   const oldSession = session; session = null;videoFormat={layout:'mono'};frameMetadata.clear();activeCodec='';statsText='';previousStats=null;
   if (peer) {peer.close();peer=null;}
   if (videoElement) {videoElement.pause();videoElement.srcObject=null;videoElement=null;}
@@ -265,6 +268,7 @@ $('start').onclick = async () => {
     socket.onmessage = event => {
       if (socket !== activeSocket) return;
       const reply = JSON.parse(event.data);
+      contactFeedback.receive(reply.feedback || reply.video?.feedback);
       if (reply.video) {videoFormat=reply.video;showVideoResolution();}
       if (reply.type === 'video_answer') activeCodec=reply.codec || '';
       if (reply.type === 'video_answer' && peer) peer.setRemoteDescription({type:'answer',sdp:reply.sdp}).catch(error=>{$('video-status').textContent=error.message;});
@@ -297,6 +301,7 @@ $('start').onclick = async () => {
           else if (performance.now()-videoProgressAt > 3000) {stop();status('Video stalled. Reconnect to resume.');return;}
         }
       }
+      contactFeedback.frame(activeSession,t,gl,viewer?.views,layer);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       if (outstanding !== null) {
         const delay = performance.now() - sentAt;

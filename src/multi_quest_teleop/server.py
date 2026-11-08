@@ -109,6 +109,12 @@ class WebXRServer:
             response.headers['Content-Type'] = 'text/html; charset=utf-8'
             response.headers['Cache-Control'] = 'no-store'
             return response
+        if url.path == '/feedback.js' and request.headers.get('Upgrade', '').lower() != 'websocket':
+            response = connection.respond(200, files('multi_quest_teleop').joinpath('feedback.js').read_text())
+            del response.headers['Content-Type']
+            response.headers['Content-Type'] = 'text/javascript; charset=utf-8'
+            response.headers['Cache-Control'] = 'no-store'
+            return response
         query = parse_qs(url.query)
         operator = query.get('operator', [''])[0]
         supplied = query.get('token', [''])[0]

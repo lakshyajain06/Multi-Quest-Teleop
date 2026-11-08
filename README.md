@@ -110,12 +110,36 @@ Optional launch parameters belong in the URL fragment, e.g.
 `#server=https%3A%2F%2F192.168.1.100%3A8443&operator=a&token=YOUR_SESSION_TOKEN`.
 Fragments are not sent to GitHub. Do not publish token-bearing URLs or keys.
 
+## Optional contact feedback (0.5.4)
+
+The standard GitHub Pages and locally served clients support per-hand haptics
+and a soft red self-collision border. Applications supply contact feedback;
+the client does not estimate forces or change robot commands. Without feedback
+metadata, existing applications behave as before.
+
+The client accepts this optional object as `feedback` in an input ACK, or as
+`video.feedback` alongside the existing video-format metadata:
+
+```json
+{"version": 1, "seq": 42, "haptics": {"left": 0.3, "right": 0.0}, "self_collision": true}
+```
+
+`seq` must increase for each fresh application sample and stay monotonic across
+episode resets. A repeated ACK does not renew an old sample. Intensities are
+clamped to 0–0.65, with short pulses issued at most once per 75 ms. Feedback
+expires after 250 ms without a new sample, and haptics stop when XR is hidden
+or the connection ends. Missing haptic actuators or rejected browser promises
+leave input/video available. The border fades in the periphery of each eye,
+independent of video reprojection, and leaves the centre clear. The application
+remains responsible for suppressing haptics when controller tracking is invalid.
+
 ## Tests
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py' -v
 node tests/browser_trials.cjs
 node tests/browser_video_trials.cjs
+node tests/browser_feedback_trials.cjs
 ```
 
 Server tests require only the package dependencies. WebRTC tests require the

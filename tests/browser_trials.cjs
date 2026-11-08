@@ -22,7 +22,7 @@ function makeSession(){
 const context={document:{getElementById:id=>elements[id]},location:{search:'',hash:'#server=https%3A%2F%2F192.168.1.100%3A8443&token=secret&operator=b',href:'https://lakshyajain06.github.io/Multi-Quest-Teleop/',protocol:'https:',hostname:'lakshyajain06.github.io',origin:'https://lakshyajain06.github.io'},
   URL,URLSearchParams,WebSocket:Socket,isSecureContext:true,performance:{now:()=>now},
   navigator:{xr:{requestSession:async()=>currentSession=makeSession()}},XRWebGLLayer:class{},window:{addEventListener(){}}};
-vm.createContext(context);vm.runInContext(script,context);
+vm.createContext(context);vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../src/multi_quest_teleop/feedback.js'),'utf8'),context);vm.runInContext(script,context);
 const frame={getPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:0,z:0,w:1}}})};
 (async()=>{
   assert.equal(elements.operator.value,'b');
