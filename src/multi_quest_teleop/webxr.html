@@ -3,7 +3,7 @@
 <title>Quest teleoperation</title>
 <style>body{font:20px system-ui;max-width:700px;margin:3rem auto;padding:1rem;background:#14202b;color:#edf5ff}input,button{font:inherit;padding:.6rem;margin:.4rem;max-width:90%}label{display:block}#status{white-space:pre-wrap}</style>
 <h1>Quest teleoperation</h1>
-<p>Client 0.5.5 · stereo world view</p>
+<p>Client 0.5.6 · stereo world view</p>
 <p>Connect each headset with its assigned operator ID. Release grip once, then hold grip to move. Trigger controls the gripper. The simulation video appears in the headset when video is enabled on the workstation.</p>
 <label>Workstation address <input id="server" placeholder="https://192.168.1.100:8443" autocomplete="off"></label>
 <p><a id="certificate" target="_blank" rel="noopener noreferrer" style="color:#8ed7ff">Accept workstation certificate</a> once, then return here. Allow local network access if the browser asks.</p>
@@ -13,12 +13,12 @@
 </details>
 <label><input id="video-enabled" type="checkbox" checked> Receive simulation video</label>
 <p id="video-status">Video not connected.</p>
-<label><input id="feedback-test" type="checkbox"> Test vibration and red border after connecting</label>
+<label><input id="feedback-test" type="checkbox"> Test vibration and red tint after connecting</label>
 <p id="feedback-status" style="white-space:pre-wrap">Contact feedback: waiting.</p>
 <button id="start">Connect and enter XR</button><button id="stop" disabled>Disconnect</button>
 <p id="status">Ready. Use Quest controllers. Controller input and per-operator video.</p>
 <canvas id="view"></canvas>
-<script src="feedback.js?v=0.5.5"></script>
+<script src="feedback.js?v=0.5.6"></script>
 <script>
 const contactFeedback = createContactFeedback();
 const $ = id => document.getElementById(id);
@@ -82,7 +82,7 @@ function createVideoRenderer(gl) {
     return result;
   };
   const vertex = shader(gl.VERTEX_SHADER, 'attribute vec2 p; varying vec2 uv; uniform vec2 fit; void main(){uv=(p+1.0)*0.5; gl_Position=vec4(p*fit,0.0,1.0);}');
-  const fragment = shader(gl.FRAGMENT_SHADER, 'precision highp float; varying vec2 uv; uniform sampler2D image; uniform mat4 projectionMap; uniform float stereo; uniform vec2 eyeRange; uniform vec2 texel; void main(){vec2 sampleUV=uv; if(stereo>0.5){vec4 ray=projectionMap*vec4(uv*2.0-1.0,1.0,1.0); sampleUV=ray.xy/ray.w*0.5+0.5;} if(any(lessThan(sampleUV,vec2(0.0)))||any(greaterThan(sampleUV,vec2(1.0)))){gl_FragColor=vec4(0.0,0.0,0.0,1.0);return;} sampleUV=clamp(sampleUV,texel,vec2(1.0)-texel); sampleUV.x=eyeRange.x+sampleUV.x*eyeRange.y; gl_FragColor=vec4(texture2D(image,sampleUV).rgb,1.0);}');
+  const fragment = shader(gl.FRAGMENT_SHADER, 'precision highp float; varying vec2 uv; uniform sampler2D image; uniform mat4 projectionMap; uniform float stereo; uniform vec2 eyeRange; uniform vec2 texel; uniform float contactTint; void main(){vec2 sampleUV=uv; if(stereo>0.5){vec4 ray=projectionMap*vec4(uv*2.0-1.0,1.0,1.0); sampleUV=ray.xy/ray.w*0.5+0.5;} if(any(lessThan(sampleUV,vec2(0.0)))||any(greaterThan(sampleUV,vec2(1.0)))){gl_FragColor=vec4(mix(vec3(0.),vec3(.95,.025,.025),contactTint),1.);return;} sampleUV=clamp(sampleUV,texel,vec2(1.0)-texel); sampleUV.x=eyeRange.x+sampleUV.x*eyeRange.y; gl_FragColor=vec4(mix(texture2D(image,sampleUV).rgb,vec3(.95,.025,.025),contactTint),1.0);}');
   const program = gl.createProgram(); gl.attachShader(program,vertex); gl.attachShader(program,fragment); gl.linkProgram(program);
   gl.deleteShader(vertex); gl.deleteShader(fragment);
   if (!gl.getProgramParameter(program,gl.LINK_STATUS)) throw Error(gl.getProgramInfoLog(program));
@@ -114,7 +114,7 @@ function createVideoRenderer(gl) {
         callback=video.requestVideoFrameCallback(frame);
       }
     },
-    draw(video, views, layer, format) {
+    draw(video, views, layer, format, tint=0) {
       if (!video || video.readyState < 2 || !views || (managed && !hasTexture)) return;
       const matched=stamp===null ? null : frameMetadata.get(stamp);
       format=matched?.video || format;
@@ -126,6 +126,7 @@ function createVideoRenderer(gl) {
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,texture);
       if(!managed) upload(video);
       gl.uniform1i(gl.getUniformLocation(program,'image'),0);
+      gl.uniform1f(gl.getUniformLocation(program,'contactTint'),tint);
       for (const view of views) {
         const viewport=layer.getViewport(view);
         gl.enable(gl.SCISSOR_TEST);gl.scissor(viewport.x,viewport.y,viewport.width,viewport.height);
@@ -299,14 +300,14 @@ $('start').onclick = async () => {
       gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
       gl.disable(gl.SCISSOR_TEST);gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       const viewer = xrFrame.getViewerPose?.(space);
+      const contactTint = contactFeedback.update(activeSession,t);
       if (videoRenderer) {
-        videoRenderer.draw(videoElement,viewer?.views,layer,videoFormat);
+        videoRenderer.draw(videoElement,viewer?.views,layer,videoFormat,contactTint);
         if (videoElement && videoElement.readyState >= 2) {
           if (videoElement.currentTime !== videoTime) {videoTime=videoElement.currentTime;videoProgressAt=performance.now();}
           else if (performance.now()-videoProgressAt > 3000) {stop();status('Video stalled. Reconnect to resume.');return;}
         }
       }
-      contactFeedback.frame(activeSession,t,gl,viewer?.views,layer);
       if ($('feedback-test').checked && !feedbackTestStarted
           && (!$('video-enabled').checked || videoElement?.readyState >= 2)
           && Array.from(activeSession.inputSources).some(source=>source.gamepad)) {

@@ -1,11 +1,12 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
 const script=fs.readFileSync(path.join(__dirname,'../src/multi_quest_teleop/webxr.html'),'utf8').split('<script>')[1].split('</script>')[0];
-let nextFrame,session,draws=0,uploads=0;const ranges=[],fits=[],matrices=[];
+let nextFrame,session,draws=0,uploads=0;const ranges=[],fits=[],matrices=[],tints=[];
 const elements=Object.fromEntries(['token','operator','start','stop','status','view','server','certificate','video-enabled','video-status','feedback-test','feedback-status'].map(id=>[id,{value:'',removeAttribute(){}}]));
 elements['video-enabled'].checked=true;
 const gl=new Proxy({makeXRCompatible:async()=>{},getShaderParameter:()=>true,getProgramParameter:()=>true,
  getUniformLocation:(_,name)=>name,
  uniform2f:(name,x,y)=>{if(name==='eyeRange')ranges.push([x,y]);if(name==='fit')fits.push([x,y]);},
+ uniform1f:(name,value)=>{if(name==='contactTint')tints.push(value);},
  uniformMatrix4fv:(_,transpose,matrix)=>matrices.push(Array.from(matrix)),
  drawArrays:()=>draws++,texImage2D:()=>uploads++},{get:(target,key)=>target[key] || (()=>({}))});
 elements.view.getContext=()=>gl;
@@ -71,7 +72,8 @@ vm.createContext(context);vm.runInContext(fs.readFileSync(require('node:path').j
  socket.onmessage({data:JSON.stringify({video:{...format,feedback:{version:1,seq:1,haptics:{left:.4,right:0},self_collision:true}}})});
  const before=draws;
  nextFrame(1,{getViewerPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:0,z:0,w:1}},views:[eyeView('left',.968),eyeView('right',1.032)]})});
- assert.deepEqual(pulses,[[.4,80]]);assert.equal(draws-before,4); // stereo image + both borders
+ assert.deepEqual(pulses,[[.4,80]]);assert.equal(draws-before,2); // tint is part of the stereo video draw
+ assert.ok(tints.at(-1)>0);assert.ok(tints.at(-1)<=.22);
  elements['feedback-test'].checked=true;
  const testView={getViewerPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:0,z:0,w:1}},views:[eyeView('left',.968),eyeView('right',1.032)]})};
  nextFrame(2,testView);nextFrame(3,testView);
