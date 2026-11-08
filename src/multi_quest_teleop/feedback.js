@@ -3,6 +3,8 @@
 function createContactFeedback() {
   let sample = null, receivedAt = -Infinity, sequence = -1;
   let opacity = 0, previousFrame = null;
+  const red = [.95,.025,.025], orange = [1.,.45,.015];
+  let color = red;
   let testUntil = -Infinity, packets = 0, requested = 0, completed = 0, lastError = '';
   let hands = {}, forces = {left:0,right:0};
   const pulses = new Map();
@@ -15,10 +17,13 @@ function createContactFeedback() {
     receivedAt = now;
     packets++;
     forces = {left:clamp(value.arm_force_n?.left,1e6),right:clamp(value.arm_force_n?.right,1e6)};
+    const blocked = value.command_blocked === true || value.collision_blocked === true;
+    const reasons = Object.entries(value.blocked_commands || {}).slice(0,8);
     sample = {left: clamp(value.haptics?.left, .65), right: clamp(value.haptics?.right, .65),
               collision: value.self_collision === true,
-              blocked: value.command_blocked === true || value.collision_blocked === true,
-              reasons: Object.entries(value.blocked_commands || {}).slice(0,8).map(([name,reason])=>`${name}: ${reason}`).join(', ')};
+              collisionBlocked: value.collision_blocked === true || (blocked && reasons.some(([,reason])=>['self_collision','collision'].includes(reason))),
+              blocked,
+              reasons: reasons.map(([name,reason])=>`${name}: ${reason}`).join(', ')};
   }
 
   function pulse(actuator, intensity, duration) {
@@ -48,12 +53,17 @@ function createContactFeedback() {
     tested.clear();testUntil=-Infinity;packets=0;requested=0;completed=0;lastError='';hands={};forces={left:0,right:0};
     sample = null; receivedAt = -Infinity; sequence = -1;
     opacity = 0; previousFrame = null;
+    color = red;
   }
 
   function update(session, now) {
     const fresh = now - receivedAt < 250 && session.visibilityState === 'visible';
     const testing = now < testUntil && session.visibilityState === 'visible';
-    const target = testing ? .35 : (fresh && (sample?.collision || sample?.blocked) ? .22 : 0);
+    const collision = fresh && (sample?.collision || sample?.collisionBlocked);
+    const blocked = fresh && sample?.blocked;
+    const target = testing ? .35 : (collision || blocked ? .22 : 0);
+    if (testing || collision) color = red;
+    else if (blocked) color = orange;
     const dt = previousFrame === null ? 16 : Math.max(0, Math.min(100, now - previousFrame));
     opacity += (target - opacity) * (1 - Math.exp(-dt / 70));
     previousFrame = now;
@@ -89,6 +99,7 @@ function createContactFeedback() {
 
   return {
     receive, reset, update, describe,
+    get color() {return color;},
     startTest(now=performance.now()) {testUntil=now+1200;tested.clear();},
 
   };

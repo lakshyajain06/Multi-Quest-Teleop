@@ -110,7 +110,7 @@ Optional launch parameters belong in the URL fragment, e.g.
 `#server=https%3A%2F%2F192.168.1.100%3A8443&operator=a&token=YOUR_SESSION_TOKEN`.
 Fragments are not sent to GitHub. Do not publish token-bearing URLs or keys.
 
-## Optional contact feedback (0.5.7)
+## Optional contact feedback (0.5.8)
 
 The standard GitHub Pages and locally served clients support per-hand haptics
 and a soft red self-collision tint. Applications supply contact feedback;
@@ -148,8 +148,11 @@ being visible through the headset lens mask.
 
 Applications may also send `command_blocked: true`, `collision_blocked: true`
 and a `blocked_commands` object such as `{"left_pose":"self_collision"}`.
-Either blocked flag keeps the red tint on for every fresh sample, even when
-no physical contact force is present. Send `command_blocked: false` and clear
+Blocked flags keep the tint on for every fresh sample, even when no physical
+contact force is present. Collision rejection or physical self-contact uses
+red. Other command rejections, including `joint_limit` and `ik_unreachable`,
+use orange. Red takes priority when both conditions are active.
+Send `command_blocked: false` and clear
 the collision flag when the active commands are accepted or released. The
 client does not clear a blocked state on a timer while fresh blocked samples
 continue to arrive. `blocked_commands` preserves the actual reason, including

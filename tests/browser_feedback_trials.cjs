@@ -48,11 +48,27 @@ for(let t=0;t<=6000;t+=40){
  if(t>=400)assert(alpha>.21&&alpha<=.22);
 }
 assert.match(blocked.describe(6000),/left_pose: self_collision/);
+assert.deepEqual(blocked.color,[.95,.025,.025]);
 for(let t=6040;t<=6800;t+=40){
  blocked.receive({version:1,seq:t/40,command_blocked:false,self_collision:false,haptics:{}},t);
  blocked.update(session,t);
 }
 assert(blocked.update(session,6801)<.001);
+// Joint limits / unreachable targets use orange; collision has priority.
+const limits=createContactFeedback();
+for(let t=0;t<=1000;t+=40){
+ limits.receive({version:1,seq:t/40,command_blocked:true,self_collision:false,
+   blocked_commands:{left_pose:t<500?'joint_limit':'ik_unreachable'},haptics:{}},t);
+ limits.update(session,t);assert.deepEqual(limits.color,[1.,.45,.015]);
+}
+limits.receive({version:1,seq:26,command_blocked:true,collision_blocked:true,
+ blocked_commands:{left_pose:'joint_limit',right_pose:'self_collision'},haptics:{}},1040);
+limits.update(session,1040);assert.deepEqual(limits.color,[.95,.025,.025]);
+limits.receive({version:1,seq:27,command_blocked:true,
+ blocked_commands:{left_pose:'ik_unreachable'},haptics:{}},1080);
+limits.update(session,1080);assert.deepEqual(limits.color,[1.,.45,.015]);
+limits.receive({version:1,seq:28,command_blocked:false,haptics:{}},1120);
+limits.update(session,1120);assert.deepEqual(limits.color,[1.,.45,.015]); // keep colour during fade
 setImmediate(()=>{
  assert.match(feedback.describe(1601),/completed 1/);
  console.log('PASS: per-hand pulses, cap, cadence, expiry, hidden XR, reset, optional actuators, rumble fallback and one-shot self-test');

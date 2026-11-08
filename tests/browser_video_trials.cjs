@@ -1,12 +1,13 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
 const script=fs.readFileSync(path.join(__dirname,'../src/multi_quest_teleop/webxr.html'),'utf8').split('<script>')[1].split('</script>')[0];
-let nextFrame,session,draws=0,uploads=0;const ranges=[],fits=[],matrices=[],tints=[];
+let nextFrame,session,draws=0,uploads=0;const ranges=[],fits=[],matrices=[],tints=[],colors=[];
 const elements=Object.fromEntries(['token','operator','start','stop','status','view','server','certificate','video-enabled','video-status','feedback-test','feedback-status'].map(id=>[id,{value:'',removeAttribute(){}}]));
 elements['video-enabled'].checked=true;
 const gl=new Proxy({makeXRCompatible:async()=>{},getShaderParameter:()=>true,getProgramParameter:()=>true,
  getUniformLocation:(_,name)=>name,
  uniform2f:(name,x,y)=>{if(name==='eyeRange')ranges.push([x,y]);if(name==='fit')fits.push([x,y]);},
  uniform1f:(name,value)=>{if(name==='contactTint')tints.push(value);},
+ uniform3f:(name,r,g,b)=>{if(name==='contactColor')colors.push([r,g,b]);},
  uniformMatrix4fv:(_,transpose,matrix)=>matrices.push(Array.from(matrix)),
  drawArrays:()=>draws++,texImage2D:()=>uploads++},{get:(target,key)=>target[key] || (()=>({}))});
 elements.view.getContext=()=>gl;
@@ -74,9 +75,14 @@ vm.createContext(context);vm.runInContext(fs.readFileSync(require('node:path').j
  nextFrame(1,{getViewerPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:0,z:0,w:1}},views:[eyeView('left',.968),eyeView('right',1.032)]})});
  assert.deepEqual(pulses,[[.4,80]]);assert.equal(draws-before,2); // tint is part of the stereo video draw
  assert.ok(tints.at(-1)>0);assert.ok(tints.at(-1)<=.22);
- elements['feedback-test'].checked=true;
+ assert.deepEqual(colors.at(-1),[.95,.025,.025]);
  const testView={getViewerPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:0,z:0,w:1}},views:[eyeView('left',.968),eyeView('right',1.032)]})};
- nextFrame(2,testView);nextFrame(3,testView);
+ socket.onmessage({data:JSON.stringify({feedback:{version:1,seq:2,command_blocked:true,blocked_commands:{left_pose:'joint_limit'},haptics:{}}})});
+ nextFrame(2,testView);assert.deepEqual(colors.at(-1),[1.,.45,.015]);
+ socket.onmessage({data:JSON.stringify({feedback:{version:1,seq:3,command_blocked:true,collision_blocked:true,blocked_commands:{left_pose:'ik_unreachable',right_pose:'self_collision'},haptics:{}}})});
+ nextFrame(3,testView);assert.deepEqual(colors.at(-1),[.95,.025,.025]);
+ elements['feedback-test'].checked=true;
+ nextFrame(4,testView);nextFrame(5,testView);
  assert.deepEqual(pulses.at(-1),[.65,350]); // explicit checkbox, independent of forces
  await elements.stop.onclick();assert.equal(Peer.all[0].closed,true);assert.equal(video.srcObject,null);
  assert.deepEqual(pulses.at(-1),[0,1]);
