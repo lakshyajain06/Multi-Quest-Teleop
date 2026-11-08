@@ -3,7 +3,7 @@
 <title>Quest teleoperation</title>
 <style>body{font:20px system-ui;max-width:700px;margin:3rem auto;padding:1rem;background:#14202b;color:#edf5ff}input,button{font:inherit;padding:.6rem;margin:.4rem;max-width:90%}label{display:block}#status{white-space:pre-wrap}</style>
 <h1>Quest teleoperation</h1>
-<p>Client 0.5.4 · stereo world view</p>
+<p>Client 0.5.5 · stereo world view</p>
 <p>Connect each headset with its assigned operator ID. Release grip once, then hold grip to move. Trigger controls the gripper. The simulation video appears in the headset when video is enabled on the workstation.</p>
 <label>Workstation address <input id="server" placeholder="https://192.168.1.100:8443" autocomplete="off"></label>
 <p><a id="certificate" target="_blank" rel="noopener noreferrer" style="color:#8ed7ff">Accept workstation certificate</a> once, then return here. Allow local network access if the browser asks.</p>
@@ -13,14 +13,17 @@
 </details>
 <label><input id="video-enabled" type="checkbox" checked> Receive simulation video</label>
 <p id="video-status">Video not connected.</p>
+<label><input id="feedback-test" type="checkbox"> Test vibration and red border after connecting</label>
+<p id="feedback-status" style="white-space:pre-wrap">Contact feedback: waiting.</p>
 <button id="start">Connect and enter XR</button><button id="stop" disabled>Disconnect</button>
 <p id="status">Ready. Use Quest controllers. Controller input and per-operator video.</p>
 <canvas id="view"></canvas>
-<script src="feedback.js?v=0.5.4"></script>
+<script src="feedback.js?v=0.5.5"></script>
 <script>
 const contactFeedback = createContactFeedback();
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.hash.slice(1) || location.search);
+$('feedback-test').checked = params.get('feedbackTest') === '1';
 $('server').value = params.get('server') || (location.hostname?.endsWith('github.io') ? '' : location.origin || '');
 function workstationURL() {
   const address = $('server').value.trim();
@@ -215,6 +218,7 @@ function showVideoResolution() {
 }
 function status(text) { $('status').textContent = text; }
 async function stop() {
+  $('feedback-status').textContent=contactFeedback.describe();
   contactFeedback.reset(session);
   const oldSession = session; session = null;videoFormat={layout:'mono'};frameMetadata.clear();activeCodec='';statsText='';previousStats=null;
   if (peer) {peer.close();peer=null;}
@@ -234,6 +238,7 @@ $('start').onclick = async () => {
     // Request XR directly in the click handler to preserve user activation.
     session = await navigator.xr.requestSession($('video-enabled').checked ? 'immersive-vr' : 'immersive-ar', {requiredFeatures:['local-floor']});
     const activeSession = session;
+    let feedbackTestStarted=false,lastFeedbackStatusAt=0;
     activeSession.addEventListener('end', () => { if (session === activeSession) stop(); });
     activeSession.addEventListener('visibilitychange', () => {
       if (activeSession.visibilityState !== 'visible') { stop(); status('XR hidden. Reconnect and release grip.'); }
@@ -302,6 +307,14 @@ $('start').onclick = async () => {
         }
       }
       contactFeedback.frame(activeSession,t,gl,viewer?.views,layer);
+      if ($('feedback-test').checked && !feedbackTestStarted
+          && (!$('video-enabled').checked || videoElement?.readyState >= 2)
+          && Array.from(activeSession.inputSources).some(source=>source.gamepad)) {
+        contactFeedback.startTest();feedbackTestStarted=true;
+      }
+      if (performance.now()-lastFeedbackStatusAt>500) {
+        $('feedback-status').textContent=contactFeedback.describe();lastFeedbackStatusAt=performance.now();
+      }
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       if (outstanding !== null) {
         const delay = performance.now() - sentAt;

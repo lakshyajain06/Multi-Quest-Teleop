@@ -1,7 +1,7 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
 const script=fs.readFileSync(path.join(__dirname,'../src/multi_quest_teleop/webxr.html'),'utf8').split('<script>')[1].split('</script>')[0];
 let nextFrame,session,draws=0,uploads=0;const ranges=[],fits=[],matrices=[];
-const elements=Object.fromEntries(['token','operator','start','stop','status','view','server','certificate','video-enabled','video-status'].map(id=>[id,{value:'',removeAttribute(){}}]));
+const elements=Object.fromEntries(['token','operator','start','stop','status','view','server','certificate','video-enabled','video-status','feedback-test','feedback-status'].map(id=>[id,{value:'',removeAttribute(){}}]));
 elements['video-enabled'].checked=true;
 const gl=new Proxy({makeXRCompatible:async()=>{},getShaderParameter:()=>true,getProgramParameter:()=>true,
  getUniformLocation:(_,name)=>name,
@@ -72,6 +72,10 @@ vm.createContext(context);vm.runInContext(fs.readFileSync(require('node:path').j
  const before=draws;
  nextFrame(1,{getViewerPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:0,z:0,w:1}},views:[eyeView('left',.968),eyeView('right',1.032)]})});
  assert.deepEqual(pulses,[[.4,80]]);assert.equal(draws-before,4); // stereo image + both borders
+ elements['feedback-test'].checked=true;
+ const testView={getViewerPose:()=>({transform:{position:{x:1,y:2,z:3},orientation:{x:0,y:0,z:0,w:1}},views:[eyeView('left',.968),eyeView('right',1.032)]})};
+ nextFrame(2,testView);nextFrame(3,testView);
+ assert.deepEqual(pulses.at(-1),[.65,350]); // explicit checkbox, independent of forces
  await elements.stop.onclick();assert.equal(Peer.all[0].closed,true);assert.equal(video.srcObject,null);
  assert.deepEqual(pulses.at(-1),[0,1]);
  console.log('PASS: WebRTC offer/answer, video playback, per-eye texture rendering, headset pose uplink, media cleanup');

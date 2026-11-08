@@ -27,4 +27,19 @@ feedback.receive({version:1,seq:1,haptics:{left:.2,right:.2},self_collision:fals
 feedback.update(session,301);
 feedback.receive({version:1,seq:2,haptics:{left:NaN,right:Infinity},self_collision:false},310);
 feedback.update(session,311);
-setImmediate(()=>console.log('PASS: per-hand pulses, intensity cap, cadence, duplicate expiry, hidden XR, reset and optional actuators'));
+// A single explicit test pulse isolates browser support from simulation forces.
+const rumble=[];
+session.inputSources=[{handedness:'left',gamepad:{vibrationActuator:{playEffect:(type,options)=>{
+ rumble.push([type,options]);return Promise.resolve('complete');}}}}];
+feedback.reset(session);rumble.length=0;feedback.startTest(400);
+assert(feedback.update(session,401)>0);
+assert.equal(rumble.length,1);assert.equal(rumble[0][0],'dual-rumble');
+assert.equal(rumble[0][1].duration,350);assert.equal(rumble[0][1].strongMagnitude,.65);
+feedback.update(session,500);assert.equal(rumble.length,1); // one pulse, not repeated
+assert.match(feedback.describe(500),/rumble supported/);
+assert.match(feedback.describe(500),/self-test running/);
+feedback.update(session,1601);assert.equal(rumble.at(-1)[1].strongMagnitude,0);
+setImmediate(()=>{
+ assert.match(feedback.describe(1601),/completed 1/);
+ console.log('PASS: per-hand pulses, cap, cadence, expiry, hidden XR, reset, optional actuators, rumble fallback and one-shot self-test');
+});
