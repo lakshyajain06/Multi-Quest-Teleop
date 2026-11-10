@@ -22,7 +22,8 @@ hud.receive(feedback(0,0,'Setting up'),0);hud.draw(views,layer,1);
 assert.equal(draws,2);assert.equal(uploads,1);
 assert.deepEqual(viewports,[[0,0,512,512],[512,0,512,512]]);
 assert.deepEqual(rects[0],rects[1]);
-assert(rects[0][0]>.3 && rects[0][1]>.6 && rects[0][2]<.8 && rects[0][3]<.8); // inset upper-right in both eyes
+assert(Math.abs((rects[0][0]+rects[0][2])/2-.5)<1e-6 && rects[0][3]<.5); // centered below the middle in both eyes
+assert(rects[0][2]-rects[0][0]<.35);
 assert.deepEqual(labels,['Ultra: Setting up','Completed cycles: 0']);
 hud.receive(feedback(1,1,'Pick up the cube'),10);assert.equal(uploads,2);
 hud.receive(feedback(1,2,'Incorrect repeated ACK',10),20);assert.equal(uploads,2);

@@ -108,7 +108,7 @@ function createContactFeedback() {
 /* A headset-local task panel, composited after video reprojection in each eye.
  * Its pixels never enter the streamed camera images or recorded datasets. */
 function createAnnotationHUD(gl) {
-  const canvas=document.createElement('canvas');canvas.width=512;canvas.height=128;
+  const canvas=document.createElement('canvas');canvas.width=512;canvas.height=96;
   const context=canvas.getContext('2d');
   let sample=null,receivedAt=-Infinity,feedbackSequence=-1,annotationSequence=-1,key='';
   const shader=(type,code)=>{
@@ -142,11 +142,11 @@ function createAnnotationHUD(gl) {
       const nextKey=JSON.stringify(sample);
       if(nextKey===key)return;
       key=nextKey;
-      context.clearRect(0,0,512,128);context.fillStyle='rgba(0,0,0,.75)';context.fillRect(0,0,512,128);
-      context.textAlign='right';context.textBaseline='middle';context.fillStyle='white';
-      context.font='bold 34px system-ui';
-      context.fillText(`${sample.robot==='ultra' ? 'Ultra' : 'YOR'}: ${sample.task}`,496,38,480);
-      context.font='30px system-ui';context.fillText(`Completed cycles: ${sample.cycles}`,496,91,480);
+      context.clearRect(0,0,512,96);context.fillStyle='rgba(0,0,0,.75)';context.fillRect(0,0,512,96);
+      context.textAlign='center';context.textBaseline='middle';context.fillStyle='white';
+      context.font='600 24px system-ui';
+      context.fillText(`${sample.robot==='ultra' ? 'Ultra' : 'YOR'}: ${sample.task}`,256,30,480);
+      context.font='20px system-ui';context.fillText(`Completed cycles: ${sample.cycles}`,256,66,480);
       gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
       gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,canvas);
@@ -161,10 +161,10 @@ function createAnnotationHUD(gl) {
       gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);
       gl.uniform1i(gl.getUniformLocation(program,'image'),0);
       for(const view of views){
-        const viewport=layer.getViewport(view),width=.43,height=width*viewport.width/viewport.height/4;
+        const viewport=layer.getViewport(view),width=.30,height=width*viewport.width/viewport.height*canvas.height/canvas.width;
         gl.enable(gl.SCISSOR_TEST);gl.scissor(viewport.x,viewport.y,viewport.width,viewport.height);
         gl.viewport(viewport.x,viewport.y,viewport.width,viewport.height);
-        gl.uniform4f(gl.getUniformLocation(program,'rect'),.78-width,.74-height,.78,.74);
+        gl.uniform4f(gl.getUniformLocation(program,'rect'),.5-width/2,.38-height/2,.5+width/2,.38+height/2);
         gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
       }
       gl.disable(gl.SCISSOR_TEST);gl.disable(gl.BLEND);
