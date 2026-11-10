@@ -105,7 +105,7 @@ function createContactFeedback() {
   };
 }
 
-/* A headset-local task panel, composited after video reprojection in each eye.
+/* One head-relative task panel at two metres, projected through each XR eye.
  * Its pixels never enter the streamed camera images or recorded datasets. */
 function createAnnotationHUD(gl) {
   const canvas=document.createElement('canvas');canvas.width=512;canvas.height=96;
@@ -116,7 +116,7 @@ function createAnnotationHUD(gl) {
     if(!gl.getShaderParameter(value,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(value));
     return value;
   };
-  const vertex=shader(gl.VERTEX_SHADER,'attribute vec2 p; varying vec2 uv; uniform vec4 rect; void main(){uv=(p+1.)*.5;gl_Position=vec4(mix(rect.xy,rect.zw,uv)*2.-1.,0.,1.);}');
+  const vertex=shader(gl.VERTEX_SHADER,'attribute vec2 p; varying vec2 uv; uniform vec4 panel; uniform mat4 projection,eyeFromWorld,worldFromHead; void main(){uv=(p+1.)*.5;vec4 position=vec4(p*panel.xy*.5+vec2(0.,panel.z),-panel.w,1.);gl_Position=projection*eyeFromWorld*worldFromHead*position;}');
   const fragment=shader(gl.FRAGMENT_SHADER,'precision mediump float; varying vec2 uv; uniform sampler2D image; void main(){gl_FragColor=texture2D(image,uv);}');
   const program=gl.createProgram();gl.attachShader(program,vertex);gl.attachShader(program,fragment);gl.linkProgram(program);
   gl.deleteShader(vertex);gl.deleteShader(fragment);
@@ -151,8 +151,8 @@ function createAnnotationHUD(gl) {
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
       gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,canvas);
     },
-    draw(views,layer,now=performance.now()) {
-      if(!sample || !views || now-receivedAt>1500)return;
+    draw(pose,layer,now=performance.now()) {
+      if(!sample || !pose?.transform?.matrix || now-receivedAt>1500)return;
       gl.useProgram(program);gl.disable(gl.DEPTH_TEST);
       gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
       gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
@@ -160,11 +160,15 @@ function createAnnotationHUD(gl) {
       gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
       gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);
       gl.uniform1i(gl.getUniformLocation(program,'image'),0);
-      for(const view of views){
-        const viewport=layer.getViewport(view),width=.30,height=width*viewport.width/viewport.height*canvas.height/canvas.width;
+      gl.uniform4f(gl.getUniformLocation(program,'panel'),1.2,1.2*canvas.height/canvas.width,-.48,2.);
+      gl.uniformMatrix4fv(gl.getUniformLocation(program,'worldFromHead'),false,pose.transform.matrix);
+      for(const view of pose.views){
+        if(!view.projectionMatrix || !view.transform?.inverse?.matrix)continue;
+        const viewport=layer.getViewport(view);
         gl.enable(gl.SCISSOR_TEST);gl.scissor(viewport.x,viewport.y,viewport.width,viewport.height);
         gl.viewport(viewport.x,viewport.y,viewport.width,viewport.height);
-        gl.uniform4f(gl.getUniformLocation(program,'rect'),.5-width/2,.38-height/2,.5+width/2,.38+height/2);
+        gl.uniformMatrix4fv(gl.getUniformLocation(program,'projection'),false,view.projectionMatrix);
+        gl.uniformMatrix4fv(gl.getUniformLocation(program,'eyeFromWorld'),false,view.transform.inverse.matrix);
         gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
       }
       gl.disable(gl.SCISSOR_TEST);gl.disable(gl.BLEND);

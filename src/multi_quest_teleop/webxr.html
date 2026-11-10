@@ -18,7 +18,7 @@
 <button id="start">Connect and enter XR</button><button id="stop" disabled>Disconnect</button>
 <p id="status">Ready. Use Quest controllers. Controller input and per-operator video.</p>
 <canvas id="view"></canvas>
-<script src="feedback.js?v=0.5.12"></script>
+<script src="feedback.js?v=0.5.13"></script>
 <script>
 const contactFeedback = createContactFeedback();
 const $ = id => document.getElementById(id);
@@ -318,7 +318,7 @@ $('start').onclick = async () => {
           else if (performance.now()-videoProgressAt > 3000) {stop();status('Video stalled. Reconnect to resume.');return;}
         }
       }
-      annotationHUD?.draw(viewer?.views,layer,t);
+      annotationHUD?.draw(viewer,layer,t);
       if ($('feedback-test').checked && !feedbackTestStarted
           && (!$('video-enabled').checked || videoElement?.readyState >= 2)
           && Array.from(activeSession.inputSources).some(source=>source.gamepad)) {
