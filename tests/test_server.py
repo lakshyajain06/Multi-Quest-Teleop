@@ -68,8 +68,8 @@ class WebXRTrials(unittest.TestCase):
 
     def test_local_client_serves_the_same_optional_feedback_script_as_pages(self):
         with urllib.request.urlopen(f'http://127.0.0.1:{self.port}/') as response:
-            self.assertIn(b'feedback.js?v=0.5.9', response.read())
-        with urllib.request.urlopen(f'http://127.0.0.1:{self.port}/feedback.js?v=0.5.9') as response:
+            self.assertIn(b'feedback.js?v=0.5.10', response.read())
+        with urllib.request.urlopen(f'http://127.0.0.1:{self.port}/feedback.js?v=0.5.10') as response:
             self.assertIn('text/javascript', response.headers['Content-Type'])
             self.assertIn(b'createContactFeedback', response.read())
 

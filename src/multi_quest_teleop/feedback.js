@@ -104,3 +104,71 @@ function createContactFeedback() {
 
   };
 }
+
+/* A headset-local task panel, composited after video reprojection in each eye.
+ * Its pixels never enter the streamed camera images or recorded datasets. */
+function createAnnotationHUD(gl) {
+  const canvas=document.createElement('canvas');canvas.width=512;canvas.height=128;
+  const context=canvas.getContext('2d');
+  let sample=null,receivedAt=-Infinity,feedbackSequence=-1,annotationSequence=-1,key='';
+  const shader=(type,code)=>{
+    const value=gl.createShader(type);gl.shaderSource(value,code);gl.compileShader(value);
+    if(!gl.getShaderParameter(value,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(value));
+    return value;
+  };
+  const vertex=shader(gl.VERTEX_SHADER,'attribute vec2 p; varying vec2 uv; uniform vec4 rect; void main(){uv=(p+1.)*.5;gl_Position=vec4(mix(rect.xy,rect.zw,uv)*2.-1.,0.,1.);}');
+  const fragment=shader(gl.FRAGMENT_SHADER,'precision mediump float; varying vec2 uv; uniform sampler2D image; void main(){gl_FragColor=texture2D(image,uv);}');
+  const program=gl.createProgram();gl.attachShader(program,vertex);gl.attachShader(program,fragment);gl.linkProgram(program);
+  gl.deleteShader(vertex);gl.deleteShader(fragment);
+  if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program));
+  const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+  const texture=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,texture);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  return {
+    receive(feedback,now=performance.now()) {
+      if(feedback?.version!==1 || !Number.isSafeInteger(feedback.seq) || feedback.seq<=feedbackSequence)return;
+      const value=feedback.annotation;
+      if(!value){sample=null;feedbackSequence=feedback.seq;return;}
+      if(value.version!==1 || !['ultra','yor'].includes(value.robot) || typeof value.task!=='string'
+          || !value.task.length || value.task.length>80 || !Number.isSafeInteger(value.completed_cycles)
+          || value.completed_cycles<0 || !Number.isSafeInteger(value.sequence)
+          || value.sequence<0 || value.sequence<annotationSequence)return;
+      feedbackSequence=feedback.seq;annotationSequence=value.sequence;receivedAt=now;
+      sample={robot:value.robot,task:value.task,cycles:value.completed_cycles};
+      const nextKey=JSON.stringify(sample);
+      if(nextKey===key)return;
+      key=nextKey;
+      context.clearRect(0,0,512,128);context.fillStyle='rgba(0,0,0,.75)';context.fillRect(0,0,512,128);
+      context.textAlign='right';context.textBaseline='middle';context.fillStyle='white';
+      context.font='bold 34px system-ui';
+      context.fillText(`${sample.robot==='ultra' ? 'Ultra' : 'YOR'}: ${sample.task}`,496,38,480);
+      context.font='30px system-ui';context.fillText(`Completed cycles: ${sample.cycles}`,496,91,480);
+      gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,canvas);
+    },
+    draw(views,layer,now=performance.now()) {
+      if(!sample || !views || now-receivedAt>1500)return;
+      gl.useProgram(program);gl.disable(gl.DEPTH_TEST);
+      gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+      gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+      const position=gl.getAttribLocation(program,'p');gl.enableVertexAttribArray(position);
+      gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
+      gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);
+      gl.uniform1i(gl.getUniformLocation(program,'image'),0);
+      for(const view of views){
+        const viewport=layer.getViewport(view),width=.43,height=width*viewport.width/viewport.height/4;
+        gl.enable(gl.SCISSOR_TEST);gl.scissor(viewport.x,viewport.y,viewport.width,viewport.height);
+        gl.viewport(viewport.x,viewport.y,viewport.width,viewport.height);
+        gl.uniform4f(gl.getUniformLocation(program,'rect'),.96-width,.94-height,.96,.94);
+        gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+      }
+      gl.disable(gl.SCISSOR_TEST);gl.disable(gl.BLEND);
+    },
+    dispose(){sample=null;gl.deleteTexture(texture);gl.deleteBuffer(buffer);gl.deleteProgram(program);}
+  };
+}

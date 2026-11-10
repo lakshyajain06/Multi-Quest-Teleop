@@ -18,7 +18,7 @@
 <button id="start">Connect and enter XR</button><button id="stop" disabled>Disconnect</button>
 <p id="status">Ready. Use Quest controllers. Controller input and per-operator video.</p>
 <canvas id="view"></canvas>
-<script src="feedback.js?v=0.5.9"></script>
+<script src="feedback.js?v=0.5.10"></script>
 <script>
 const contactFeedback = createContactFeedback();
 const $ = id => document.getElementById(id);
@@ -40,7 +40,11 @@ updateCertificateLink();
 $('token').value = params.get('token') || '';
 $('operator').value = params.get('operator') || 'a';
 let socket, session, sequence = 0, outstanding = null, sentAt = 0;
-let peer, videoElement, videoRenderer, videoProgressAt=0, videoTime=-1;
+let peer, videoElement, videoRenderer, annotationHUD, annotationContext, videoProgressAt=0, videoTime=-1;
+function receiveAnnotation(feedback) {
+  if(!annotationHUD && annotationContext && feedback?.annotation) annotationHUD=createAnnotationHUD(annotationContext);
+  annotationHUD?.receive(feedback);
+}
 let videoFormat={layout:'mono'};
 const frameMetadata=new Map();
 let activeCodec='',statsText='',lastStatsAt=0,statsPending=false,previousStats=null;
@@ -164,6 +168,7 @@ async function startVideo(activeSocket) {
       if(peer!==activePeer) return;
       try {
         const info=JSON.parse(event.data);
+        receiveAnnotation(info.video?.feedback);
         if(Number.isInteger(info.rtpTimestamp) && info.video) {
           frameMetadata.set(info.rtpTimestamp>>>0,info);
           while(frameMetadata.size>120) frameMetadata.delete(frameMetadata.keys().next().value);
@@ -226,6 +231,8 @@ async function stop() {
   if (peer) {peer.close();peer=null;}
   if (videoElement) {videoElement.pause();videoElement.srcObject=null;videoElement=null;}
   if (videoRenderer) {videoRenderer.dispose();videoRenderer=null;}
+  if (annotationHUD) {annotationHUD.dispose();annotationHUD=null;}
+  annotationContext=null;
   if (socket) { socket.close(); socket = null; }
   if (oldSession) await oldSession.end().catch(() => {});
   $('start').disabled = false; $('stop').disabled = true;
@@ -249,6 +256,7 @@ $('start').onclick = async () => {
     if (!gl) throw Error('WebGL unavailable');
     await gl.makeXRCompatible();
     if ($('video-enabled').checked) videoRenderer=createVideoRenderer(gl);
+    annotationContext=gl;
     const layer = new XRWebGLLayer(activeSession, gl, {alpha:true});
     activeSession.updateRenderState({baseLayer:layer});
     const space = await activeSession.requestReferenceSpace('local-floor');
@@ -276,6 +284,7 @@ $('start').onclick = async () => {
       if (socket !== activeSocket) return;
       const reply = JSON.parse(event.data);
       contactFeedback.receive(reply.feedback || reply.video?.feedback);
+      receiveAnnotation(reply.feedback || reply.video?.feedback);
       if (reply.video) {videoFormat=reply.video;showVideoResolution();}
       if (reply.type === 'video_answer') activeCodec=reply.codec || '';
       if (reply.type === 'video_answer' && peer) peer.setRemoteDescription({type:'answer',sdp:reply.sdp}).catch(error=>{$('video-status').textContent=error.message;});
@@ -309,6 +318,7 @@ $('start').onclick = async () => {
           else if (performance.now()-videoProgressAt > 3000) {stop();status('Video stalled. Reconnect to resume.');return;}
         }
       }
+      annotationHUD?.draw(viewer?.views,layer,t);
       if ($('feedback-test').checked && !feedbackTestStarted
           && (!$('video-enabled').checked || videoElement?.readyState >= 2)
           && Array.from(activeSession.inputSources).some(source=>source.gamepad)) {
