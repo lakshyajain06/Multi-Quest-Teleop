@@ -160,7 +160,7 @@ function createAnnotationHUD(gl) {
       gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
       gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);
       gl.uniform1i(gl.getUniformLocation(program,'image'),0);
-      gl.uniform4f(gl.getUniformLocation(program,'panel'),1.2,1.2*canvas.height/canvas.width,-.48,2.);
+      gl.uniform4f(gl.getUniformLocation(program,'panel'),1.2,1.2*canvas.height/canvas.width,-.85,2.);
       gl.uniformMatrix4fv(gl.getUniformLocation(program,'worldFromHead'),false,pose.transform.matrix);
       for(const view of pose.views){
         if(!view.projectionMatrix || !view.transform?.inverse?.matrix)continue;
