@@ -18,7 +18,7 @@
 <button id="start">Connect and enter XR</button><button id="stop" disabled>Disconnect</button>
 <p id="status">Ready. Use Quest controllers. Controller input and per-operator video.</p>
 <canvas id="view"></canvas>
-<script src="feedback.js?v=0.5.14"></script>
+<script src="feedback.js?v=0.5.15"></script>
 <script>
 const contactFeedback = createContactFeedback();
 const $ = id => document.getElementById(id);
@@ -48,6 +48,7 @@ function receiveAnnotation(feedback) {
 let videoFormat={layout:'mono'};
 const frameMetadata=new Map();
 let activeCodec='',statsText='',lastStatsAt=0,statsPending=false,previousStats=null;
+let latestVideoStats=null,inputRttMs=0;
 function inverseMatrix(matrix) {
   const rows=Array.from({length:4},(_,r)=>Array.from({length:8},(_,c)=>c<4 ? matrix[c*4+r] : Number(c-4===r)));
   for (let col=0;col<4;col++) {
@@ -209,16 +210,25 @@ function showVideoResolution() {
       const owner=peer;lastStatsAt=now;statsPending=true;
       owner.getStats().then(report=>{
         if(peer!==owner) return;
+        const metrics={input_rtt_ms:inputRttMs,width:videoElement.videoWidth,height:videoElement.videoHeight};
+        for(const stat of report.values()) if(stat.type==='candidate-pair' && stat.state==='succeeded' && stat.nominated) {
+          metrics.round_trip_ms=stat.currentRoundTripTime*1000;
+        }
         for(const stat of report.values()) if(stat.type==='inbound-rtp' && stat.kind==='video') {
           let fps=stat.framesPerSecond;
           if(fps===undefined && previousStats) fps=(stat.framesDecoded-previousStats.frames)/(now-previousStats.time)*1000;
           if(Number.isFinite(fps)) statsText=` · ${fps.toFixed(1)} fps`;
+          Object.assign(metrics,{video_fps:fps,packets_received:stat.packetsReceived,
+            packets_lost:stat.packetsLost,jitter_ms:stat.jitter*1000,frames_dropped:stat.framesDropped});
+          if(previousStats) metrics.receive_mbps=(stat.bytesReceived-previousStats.bytes)*8/(now-previousStats.time)/1000;
           if(previousStats && stat.jitterBufferEmittedCount>previousStats.emitted) {
             const delay=(stat.jitterBufferDelay-previousStats.delay)/(stat.jitterBufferEmittedCount-previousStats.emitted)*1000;
             if(Number.isFinite(delay)) statsText+=` · buffer ${Math.round(delay)} ms`;
+            metrics.buffer_ms=delay;
           }
-          previousStats={frames:stat.framesDecoded,time:now,delay:stat.jitterBufferDelay,emitted:stat.jitterBufferEmittedCount};
+          previousStats={frames:stat.framesDecoded,time:now,bytes:stat.bytesReceived,delay:stat.jitterBufferDelay,emitted:stat.jitterBufferEmittedCount};
         }
+        latestVideoStats=Object.fromEntries(Object.entries(metrics).filter(([,value])=>Number.isFinite(value)));
       }).catch(()=>{}).finally(()=>{statsPending=false;});
     }
   }
@@ -227,7 +237,7 @@ function status(text) { $('status').textContent = text; }
 async function stop() {
   $('feedback-status').textContent=contactFeedback.describe();
   contactFeedback.reset(session);
-  const oldSession = session; session = null;videoFormat={layout:'mono'};frameMetadata.clear();activeCodec='';statsText='';previousStats=null;
+  const oldSession = session; session = null;videoFormat={layout:'mono'};frameMetadata.clear();activeCodec='';statsText='';previousStats=null;latestVideoStats=null;inputRttMs=0;
   if (peer) {peer.close();peer=null;}
   if (videoElement) {videoElement.pause();videoElement.srcObject=null;videoElement=null;}
   if (videoRenderer) {videoRenderer.dispose();videoRenderer=null;}
@@ -293,6 +303,7 @@ $('start').onclick = async () => {
         stop();status('Workstation receiver needs updating to support tracking recentering.');return;
       }
       if (reply.ack === outstanding) {
+        inputRttMs=performance.now()-sentAt;
         outstanding = null;
         if (inputDelayed) {
           inputDelayed = false;
@@ -370,7 +381,9 @@ $('start').onclick = async () => {
         const p=view.transform.position,q=view.transform.orientation;
         views.push({eye:view.eye,pose:[p.x,p.y,p.z,q.x,q.y,q.z,q.w],projection:Array.from(view.projectionMatrix)});
       }
-      socket.send(JSON.stringify({version:1,seq:outstanding,origin:originEpoch,controllers:rows,head,views:views.length===2 ? views : []}));
+      const message={version:1,seq:outstanding,origin:originEpoch,controllers:rows,head,views:views.length===2 ? views : []};
+      if(latestVideoStats) {message.stats=latestVideoStats;latestVideoStats=null;}
+      socket.send(JSON.stringify(message));
     }
     activeSession.requestAnimationFrame(frame);
   } catch (error) { await stop(); status(error.message); }
