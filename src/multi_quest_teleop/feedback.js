@@ -164,7 +164,7 @@ function createAnnotationHUD(gl) {
         const viewport=layer.getViewport(view),width=.43,height=width*viewport.width/viewport.height/4;
         gl.enable(gl.SCISSOR_TEST);gl.scissor(viewport.x,viewport.y,viewport.width,viewport.height);
         gl.viewport(viewport.x,viewport.y,viewport.width,viewport.height);
-        gl.uniform4f(gl.getUniformLocation(program,'rect'),.96-width,.94-height,.96,.94);
+        gl.uniform4f(gl.getUniformLocation(program,'rect'),.78-width,.74-height,.78,.74);
         gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
       }
       gl.disable(gl.SCISSOR_TEST);gl.disable(gl.BLEND);
